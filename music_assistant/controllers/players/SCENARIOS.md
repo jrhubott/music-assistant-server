@@ -1868,6 +1868,17 @@ protocol reaches it again, and the plug is not switched a second time.
   two protocols, one of which reads available for a while after the power is cut.
 - Proven by: `test_power_control.py::test_a_new_start_waits_again_for_a_member_whose_own_protocol_is_not_back`
 
+### GROUP-48 · Members on the leader's own stream follow it onto AirPlay, or leave
+
+Kitchen plays with Office and Den on HEOS, which can not pass AirPlay on to its members. The
+user adds Office again and Patio, which only has AirPlay. Kitchen's playback moves to its AirPlay
+receiver, which takes Patio and Office in one call. Den has no AirPlay receiver: it leaves the
+group, and that is logged as a warning.
+
+- End-to-end: **possible with** two HEOS speakers with AirPlay, a HEOS speaker without it, and an
+  AirPlay receiver.
+- Proven by: `test_grouping.py::test_members_on_the_leaders_own_stream_follow_it_onto_airplay`
+
 ## Where playback goes
 
 A player plays through one of its outputs, and what the device plays by itself is steered
