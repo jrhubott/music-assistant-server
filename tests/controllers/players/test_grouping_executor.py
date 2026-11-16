@@ -25,6 +25,7 @@ from music_assistant.controllers.players.grouping_plan import (
     MemberLists,
     MemberStage,
     Refuse,
+    Regroup,
     SetMembers,
     Unfollow,
     Ungroup,
@@ -302,3 +303,20 @@ async def test_followers_that_still_follow_are_left_alone() -> None:
         await grouping._join_followers(players, "leader")  # type: ignore[arg-type]
     players._unfollow.assert_not_awaited()
     scripted.assert_not_called()
+
+
+async def test_a_regroup_lets_its_lights_follow_again() -> None:
+    """The lights a regroup takes off the protocol follow the leader once it joined afresh."""
+    players = _Players()
+    run = MagicMock(players=players)
+    regroup = Regroup(
+        leader_id="leader",
+        protocol_id="sendspin_leader",
+        removed=(),
+        member_ids=(),
+        follower_ids=("light",),
+    )
+    with patch.object(grouping, "_join", AsyncMock()) as join:
+        await grouping._regroup(run, regroup)
+    join.assert_awaited_once()
+    players._follow.assert_awaited_once_with("leader", "light")

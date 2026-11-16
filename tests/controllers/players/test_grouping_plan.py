@@ -1358,3 +1358,36 @@ def test_a_follower_joins_once_its_leader_plays_over_its_protocol(
     _with_light(world, follows="s", synced_to="s", leader_output=leader_output)
     world.players["s"] = replace(world.players["s"], followers=("h",))
     assert followers_to_join(world.snapshot(), "s") == expected
+
+
+def _light_left_on_sendspin(world: _World, *others: str) -> None:
+    """Let Sonos leader s play over Sendspin with light h, and any other members, grouped."""
+    _with_light(world, leader_output="sendspin_s", synced_to="s")
+    world.protocols["sendspin_s"] = replace(
+        world.protocols["sendspin_s"],
+        group_members=("sendspin_s", "sendspin_h", *(f"sendspin_{other}" for other in others)),
+    )
+    for other in others:
+        world.protocol(f"sendspin_{other}", other, "sendspin", role=ProtocolRole.NATIVE)
+        world.player(other, f"sendspin_{other}")
+
+
+def test_a_light_left_on_sendspin_follows_again_at_a_fresh_start() -> None:
+    """Once the last Sendspin speaker left, the leader regroups natively and the light follows."""
+    world = _World()
+    _light_left_on_sendspin(world)
+    plan = _plan(world, ChangeKind.REGROUP_FOR_START, "s")
+    assert plan.regroup == Regroup(
+        leader_id="s",
+        protocol_id="sendspin_s",
+        removed=("sendspin_h",),
+        member_ids=(),
+        follower_ids=("h",),
+    )
+
+
+def test_a_light_beside_a_sendspin_speaker_stays_a_member() -> None:
+    """A Sendspin speaker still needs the group on Sendspin, so the light stays a member."""
+    world = _World()
+    _light_left_on_sendspin(world, "x")
+    assert _plan(world, ChangeKind.REGROUP_FOR_START, "s").regroup is None

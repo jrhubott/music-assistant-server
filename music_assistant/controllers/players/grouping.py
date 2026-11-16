@@ -298,6 +298,14 @@ async def _regroup(run: _GroupRun, regroup: Regroup) -> None:
     if rules.active_output(rules.held_player(regroup.leader_id)) == regroup.protocol_id:
         run.clear_outputs([regroup.leader_id])
     await _join(run, Join(target_id=regroup.leader_id, add=regroup.member_ids), new_content=False)
+    if regroup.follower_ids:
+        run.players.logger.info(
+            "Players %s follow %s again, which plays over its own protocol",
+            ", ".join(regroup.follower_ids),
+            regroup.leader_id,
+        )
+    for member_id in regroup.follower_ids:
+        await run.players._follow(regroup.leader_id, member_id)
 
 
 class _GroupRun:

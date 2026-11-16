@@ -806,6 +806,11 @@ already plays from the buffer of its queue item, timed to the leader's reported 
   (`followers_to_join`): once the group plays over a follower's protocol, for instance because a
   Sendspin speaker joined and moved it onto Sendspin, the follower stops following and joins the
   protocol group as a member.
+- **Following again.** Once the last member that needs that protocol leaves, the group stays on
+  it until the next fresh start, as any group does. The regroup at that start
+  (`_regroup_for_start`) leaves out the members that would follow a leader on its own protocol
+  (`follows_natively`), takes them off the protocol with the rest, and lets them follow the leader
+  again (`Regroup.follower_ids`).
 
 See GROUP-59 in [SCENARIOS.md](SCENARIOS.md).
 

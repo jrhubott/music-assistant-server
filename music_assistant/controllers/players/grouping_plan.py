@@ -344,12 +344,14 @@ class Regroup:
     :param protocol_id: The protocol its group leaves.
     :param removed: The protocol ids removed from it; empty when it is not called.
     :param member_ids: The players that join the leader afresh.
+    :param follower_ids: The members that follow the leader afresh instead.
     """
 
     leader_id: str
     protocol_id: str
     removed: tuple[str, ...]
     member_ids: tuple[str, ...]
+    follower_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -626,17 +628,27 @@ def follows_instead(snapshot: GroupingSnapshot, target: PlayerView, member: Play
         return False
     if target.type not in (PlayerType.PLAYER, PlayerType.STEREO_PAIR):
         return False
-    member_own = snapshot.own(member)
-    if member_own is None:
-        return False
     # a leader that already plays over the member's protocol takes it into that group
     if target.active_output not in (None, "native"):
         output = snapshot.protocols.get(target.active_output)
-        leader_domain = output.domain if output is not None else None
-    else:
-        leader_own = snapshot.own(target)
-        leader_domain = leader_own.domain if leader_own is not None else None
-    return leader_domain != member_own.domain
+        return _follows_beside(snapshot, member, output.domain if output is not None else None)
+    return follows_natively(snapshot, target, member)
+
+
+def follows_natively(snapshot: GroupingSnapshot, target: PlayerView, member: PlayerView) -> bool:
+    """
+    Return whether a member follows the leader once the leader plays over its own protocol.
+
+    :param snapshot: The players as they are now.
+    :param target: The leader.
+    :param member: The member.
+    """
+    if not member.can_follow or member.type in PLAYBACK_TARGET_TYPES:
+        return False
+    if target.type not in (PlayerType.PLAYER, PlayerType.STEREO_PAIR):
+        return False
+    leader_own = snapshot.own(target)
+    return _follows_beside(snapshot, member, leader_own.domain if leader_own else None)
 
 
 def followers_to_join(snapshot: GroupingSnapshot, leader_id: str) -> tuple[str, ...]:
@@ -742,6 +754,14 @@ def first_grouped_protocol[T: GroupedProtocol](protocols: Iterable[T]) -> T | No
         ):
             return protocol
     return None
+
+
+def _follows_beside(
+    snapshot: GroupingSnapshot, member: PlayerView, leader_domain: str | None
+) -> bool:
+    """Return whether a member follows a leader that plays over another protocol than its own."""
+    member_own = snapshot.own(member)
+    return member_own is not None and leader_domain != member_own.domain
 
 
 class _Boundary(Exception):
@@ -1809,11 +1829,16 @@ class _Planner(GroupRules):
             member_id for member_id in protocol.group_members if member_id != protocol.protocol_id
         ]
         member_ids: list[str] = []
+        # a light that joined only because the group played over its protocol follows instead
+        follower_ids: list[str] = []
         for protocol_member_id in protocol_member_ids:
             member = self.snapshot.player_of(protocol_member_id)
             if not member or not member.available_for_playback:
                 return
-            member_ids.append(member.player_id)
+            if follows_natively(self.snapshot, player, member):
+                follower_ids.append(member.player_id)
+            else:
+                member_ids.append(member.player_id)
         protocol_members, native_members, _, protocol_domain = self._translate_adds(
             player, member_ids, None, None
         )
@@ -1843,6 +1868,7 @@ class _Planner(GroupRules):
             protocol_id=protocol.protocol_id,
             removed=tuple(removed),
             member_ids=tuple(member_ids),
+            follower_ids=tuple(follower_ids),
         )
 
     def _leave_protocol(self) -> None:

@@ -2114,7 +2114,9 @@ its queue item and timed to the position Patio reports; at a seek or a track cha
 again from where Patio is. The user removes the light, or ungroups it: it stops following and
 Patio plays on. A leader that already plays over Sendspin takes the light into that group as any
 other member, and a light that follows becomes such a member once a Sendspin speaker joins and
-moves the group onto Sendspin. A player that renders audio itself, or whose protocol can not follow, never
+moves the group onto Sendspin. When that speaker leaves again, Patio plays on over Sendspin
+until playback next starts afresh; then Patio regroups to play natively and the light follows it
+again. A player that renders audio itself, or whose protocol can not follow, never
 follows.
 
 - End-to-end: **possible with** a native speaker and a light whose bridge can follow; the lab has
@@ -2128,6 +2130,9 @@ follows.
   - `tests/controllers/players/test_grouping_plan.py::test_detaching_a_follower_unfollows_it`
   - `tests/controllers/players/test_grouping_plan.py::test_a_follower_joins_once_its_leader_plays_over_its_protocol`
   - `tests/controllers/players/test_grouping_executor.py::test_followers_join_the_group_once_it_plays_over_their_protocol`
+  - `tests/controllers/players/test_grouping_plan.py::test_a_light_left_on_sendspin_follows_again_at_a_fresh_start`
+  - `tests/controllers/players/test_grouping_plan.py::test_a_light_beside_a_sendspin_speaker_stays_a_member`
+  - `tests/controllers/players/test_grouping_executor.py::test_a_regroup_lets_its_lights_follow_again`
   - `tests/controllers/players/test_follow.py::test_playback_commands_on_a_follower_are_refused`
   - `tests/controllers/players/test_follow.py::test_play_media_on_a_follower_is_refused`
   - `tests/providers/hue_entertainment/test_follow.py::test_a_seek_reanchors_once_it_holds`
