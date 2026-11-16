@@ -102,6 +102,11 @@ class _Devices:
         self.player_objects: dict[str, _Player] = {}
         self.read_error: Exception | None = None
 
+    def followers_of(self, player_id: str) -> list[str]:
+        """Return the followers of a player in the world."""
+        player = self.world.players.get(player_id)
+        return list(player.followers) if player is not None else []
+
     def get_protocol(self, protocol_id: str) -> _Protocol | None:
         """Return the protocol object of an id in the world."""
         if protocol_id not in self.world.protocols:

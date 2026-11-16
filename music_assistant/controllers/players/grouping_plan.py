@@ -614,6 +614,52 @@ def plan_group_change(
     return _Planner(snapshot, change, progress or GroupProgress()).plan()
 
 
+def follows_instead(snapshot: GroupingSnapshot, target: PlayerView, member: PlayerView) -> bool:
+    """
+    Return whether a member follows the leader instead of joining its protocol group.
+
+    :param snapshot: The players as they are now.
+    :param target: The leader.
+    :param member: The member.
+    """
+    if not member.can_follow or member.type in PLAYBACK_TARGET_TYPES:
+        return False
+    if target.type not in (PlayerType.PLAYER, PlayerType.STEREO_PAIR):
+        return False
+    member_own = snapshot.own(member)
+    if member_own is None:
+        return False
+    # a leader that already plays over the member's protocol takes it into that group
+    if target.active_output not in (None, "native"):
+        output = snapshot.protocols.get(target.active_output)
+        leader_domain = output.domain if output is not None else None
+    else:
+        leader_own = snapshot.own(target)
+        leader_domain = leader_own.domain if leader_own is not None else None
+    return leader_domain != member_own.domain
+
+
+def followers_to_join(snapshot: GroupingSnapshot, leader_id: str) -> tuple[str, ...]:
+    """
+    Return the followers of a leader that can join its protocol group now.
+
+    That is the case once the leader plays over the protocol of the follower, for instance
+    after a Sendspin speaker joined and moved the group onto Sendspin.
+
+    :param snapshot: The players as they are now.
+    :param leader_id: The leader.
+    """
+    leader = snapshot.player(leader_id)
+    if leader is None:
+        return ()
+    return tuple(
+        member.player_id
+        for member_id in leader.followers
+        if (member := snapshot.player(member_id)) is not None
+        and not follows_instead(snapshot, leader, member)
+    )
+
+
 def set_members_group(snapshot: GroupingSnapshot, target_id: str) -> str | None:
     """
     Return the group player a member change on the target is passed on to, if any.
@@ -1594,7 +1640,7 @@ class _Planner(GroupRules):
         joining: list[str] = []
         for member_id in admitted:
             member = self.snapshot.player(member_id)
-            if member is not None and self._follows_instead(target, member):
+            if member is not None and follows_instead(self.snapshot, target, member):
                 self._note(
                     logging.INFO,
                     "Player %s follows %s, which keeps playing over its own protocol",
@@ -1612,29 +1658,6 @@ class _Planner(GroupRules):
             else:
                 leaving.append(member_id)
         return joining, leaving
-
-    def _follows_instead(self, target: PlayerView, member: PlayerView) -> bool:
-        """
-        Return whether a member follows the leader instead of joining its protocol group.
-
-        :param target: The leader.
-        :param member: The member.
-        """
-        if not member.can_follow or member.type in PLAYBACK_TARGET_TYPES:
-            return False
-        if target.type not in (PlayerType.PLAYER, PlayerType.STEREO_PAIR):
-            return False
-        member_own = self.snapshot.own(member)
-        if member_own is None:
-            return False
-        # a leader that already plays over the member's protocol takes it into that group
-        if target.active_output not in (None, "native"):
-            output = self.snapshot.protocols.get(target.active_output)
-            leader_domain = output.domain if output is not None else None
-        else:
-            leader_own = self.snapshot.own(target)
-            leader_domain = leader_own.domain if leader_own is not None else None
-        return leader_domain != member_own.domain
 
     def _follow_steps(self) -> bool:
         """Return whether the plan lets a player start or stop following."""

@@ -2113,7 +2113,8 @@ volume. The lights take the features of the audio Patio already plays, read from
 its queue item and timed to the position Patio reports; at a seek or a track change they start
 again from where Patio is. The user removes the light, or ungroups it: it stops following and
 Patio plays on. A leader that already plays over Sendspin takes the light into that group as any
-other member. A player that renders audio itself, or whose protocol can not follow, never
+other member, and a light that follows becomes such a member once a Sendspin speaker joins and
+moves the group onto Sendspin. A player that renders audio itself, or whose protocol can not follow, never
 follows.
 
 - End-to-end: **possible with** a native speaker and a light whose bridge can follow; the lab has
@@ -2125,6 +2126,8 @@ follows.
   - `tests/controllers/players/test_grouping_plan.py::test_only_a_non_audio_player_that_can_follow_follows`
   - `tests/controllers/players/test_grouping_plan.py::test_removing_a_follower_unfollows_it`
   - `tests/controllers/players/test_grouping_plan.py::test_detaching_a_follower_unfollows_it`
+  - `tests/controllers/players/test_grouping_plan.py::test_a_follower_joins_once_its_leader_plays_over_its_protocol`
+  - `tests/controllers/players/test_grouping_executor.py::test_followers_join_the_group_once_it_plays_over_their_protocol`
   - `tests/providers/hue_entertainment/test_follow.py::test_a_seek_reanchors_once_it_holds`
   - `tests/providers/hue_entertainment/test_follow.py::test_a_jump_to_the_start_waits_for_the_next_item`
 

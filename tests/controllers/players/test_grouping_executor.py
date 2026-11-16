@@ -54,6 +54,11 @@ class _Players:
         self.cmd_set_members = AsyncMock()
         self._follow = AsyncMock()
         self._unfollow = AsyncMock()
+        self.followers: dict[str, list[str]] = {}
+
+    def followers_of(self, player_id: str) -> list[str]:
+        """Return the followers of a player."""
+        return self.followers.get(player_id, [])
 
     def get_protocol(self, protocol_id: str) -> Any:
         """Return a protocol by id."""
@@ -270,3 +275,30 @@ async def test_follow_steps_go_to_the_controller() -> None:
     players._follow.assert_awaited_once_with("leader", "light")
     players._unfollow.assert_awaited_once_with("other")
     players._handle_set_members.assert_not_awaited()
+
+
+async def test_followers_join_the_group_once_it_plays_over_their_protocol() -> None:
+    """After a join moved the leader onto their protocol, its followers become members."""
+    players = _Players()
+    players.followers["leader"] = ["light"]
+    with (
+        _plans(GroupPlan(())) as scripted,
+        patch.object(grouping, "followers_to_join", MagicMock(return_value=("light",))),
+    ):
+        await grouping._join_followers(players, "leader")  # type: ignore[arg-type]
+    players._unfollow.assert_awaited_once_with("light")
+    change = scripted.call_args_list[0].args[1]
+    assert change == GroupChange(kind=ChangeKind.MEMBERS, target_id="leader", add=("light",))
+
+
+async def test_followers_that_still_follow_are_left_alone() -> None:
+    """A leader that still plays over another protocol keeps its followers following."""
+    players = _Players()
+    players.followers["leader"] = ["light"]
+    with (
+        _plans() as scripted,
+        patch.object(grouping, "followers_to_join", MagicMock(return_value=())),
+    ):
+        await grouping._join_followers(players, "leader")  # type: ignore[arg-type]
+    players._unfollow.assert_not_awaited()
+    scripted.assert_not_called()

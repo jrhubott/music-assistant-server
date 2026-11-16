@@ -22,6 +22,7 @@ from music_assistant_models.errors import (
 
 from music_assistant.constants import CONF_PLAYERS, CONF_PREFERRED_OUTPUT_PROTOCOL
 from music_assistant.controllers.players.grouping_plan import (
+    ChangeKind,
     Detach,
     Failure,
     Follow,
@@ -48,6 +49,7 @@ from music_assistant.controllers.players.grouping_plan import (
     TransferLeadership,
     Unfollow,
     Ungroup,
+    followers_to_join,
     plan_group_change,
 )
 
@@ -137,13 +139,39 @@ async def apply_group_change(
         run.left_out = False
     if plan.regroup is not None:
         await _regroup(run, plan.regroup)
+        await _join_followers(players, plan.regroup.leader_id)
     elif plan.join is not None:
         try:
             await _join(run, plan.join, new_content=change.new_content)
         except BaseException:
             await run.abort_takeover()
             raise
+        await _join_followers(players, plan.join.target_id)
     return run.takeover
+
+
+async def _join_followers(players: _PlayerControllerBase, leader_id: str) -> None:
+    """
+    Turn the followers of a leader into members once its group plays over their protocol.
+
+    :param players: The players controller.
+    :param leader_id: The leader whose group changed.
+    """
+    if not players.followers_of(leader_id):
+        return
+    member_ids = followers_to_join(grouping_snapshot(players), leader_id)
+    if not member_ids:
+        return
+    players.logger.info(
+        "Followers %s of %s join its group, which now plays over their protocol",
+        ", ".join(member_ids),
+        leader_id,
+    )
+    for member_id in member_ids:
+        await players._unfollow(member_id)
+    await apply_group_change(
+        players, GroupChange(kind=ChangeKind.MEMBERS, target_id=leader_id, add=member_ids)
+    )
 
 
 async def route_group_change(players: _PlayerControllerBase, change: GroupChange) -> bool:

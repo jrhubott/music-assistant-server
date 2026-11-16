@@ -51,6 +51,7 @@ from music_assistant.controllers.players.grouping_plan import (
     Unfollow,
     Ungroup,
     elect_ad_hoc_leader,
+    followers_to_join,
     plan_group_change,
     set_members_group,
 )
@@ -1342,3 +1343,18 @@ def test_detaching_a_follower_unfollows_it() -> None:
     world.players["s"] = replace(world.players["s"], followers=("h",), group_members=("s", "h"))
     plan = _all_plans(world, ChangeKind.DETACH, "h")
     assert _calls(plan) == [Unfollow(member_id="h")]
+
+
+@pytest.mark.parametrize(
+    ("leader_output", "expected"),
+    [("native", ()), ("sendspin_s", ("h",))],
+    ids=["native", "sendspin"],
+)
+def test_a_follower_joins_once_its_leader_plays_over_its_protocol(
+    leader_output: str, expected: tuple[str, ...]
+) -> None:
+    """A follower of a leader that moved onto Sendspin can join that group as a member."""
+    world = _World()
+    _with_light(world, follows="s", synced_to="s", leader_output=leader_output)
+    world.players["s"] = replace(world.players["s"], followers=("h",))
+    assert followers_to_join(world.snapshot(), "s") == expected
