@@ -1,5 +1,5 @@
 {
-  "fork": "jrhubott/server",
+  "fork": "jrhubott/music-assistant-server",
   "upstream": "music-assistant/server",
   "base_branch": "dev",
   "features": ["feature/hue-grouped-follow"],
