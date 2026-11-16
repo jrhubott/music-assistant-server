@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from types import MethodType
-from unittest.mock import AsyncMock, MagicMock
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from music_assistant_models.errors import PlayerCommandFailed
 
 from music_assistant.controllers.players import PlayerController
+from tests.common import MockProtocol, MockProvider, attach_mock
 
 
 def _player(player_id: str, *, can_follow: bool = True) -> MagicMock:
@@ -120,3 +122,78 @@ async def test_unfollowing_a_player_that_follows_nothing_does_nothing() -> None:
     await controller._unfollow("light")
 
     light.own_protocol.unfollow.assert_not_awaited()
+
+
+@pytest.fixture
+def real_controller() -> PlayerController:
+    """Return a players controller on a mocked server."""
+    mass = MagicMock()
+    mass.closing = False
+    mass.loop = None
+    mass.config.get = MagicMock(return_value=[])
+    mass.config.get_player_value = MagicMock(
+        side_effect=lambda _player_id, _key, default=None: default
+    )
+    mass.config.get_raw_core_config_value = MagicMock(return_value="GLOBAL")
+    mass.get_providers = MagicMock(return_value=[])
+    mass.player_queues.get = MagicMock(return_value=None)
+    controller = PlayerController(mass)
+    mass.players = controller
+    return controller
+
+
+def _follower_and_leader(controller: PlayerController) -> tuple[MockProtocol, str, str]:
+    """
+    Attach a leader and a light, and let the light follow the leader.
+
+    :return: The leader's protocol, the leader's id and the light's id.
+    """
+    mass = cast("MagicMock", controller.mass)
+    provider = MockProvider("mock_provider", instance_id="mock_instance", mass=mass)
+    leader_player, leader = attach_mock(provider, "leader", "Patio")
+    light_player, _ = attach_mock(provider, "light", "Patio Lights")
+    controller._follows[light_player.player_id] = leader_player.player_id
+    leader_player.refresh_state(signal_event=False)
+    light_player.refresh_state(signal_event=False)
+    return leader, leader_player.player_id, light_player.player_id
+
+
+@pytest.mark.parametrize(
+    ("command", "args"),
+    [
+        ("cmd_play", ()),
+        ("cmd_pause", ()),
+        ("cmd_stop", ()),
+        ("cmd_next_track", ()),
+        ("cmd_previous_track", ()),
+        ("cmd_seek", (30,)),
+    ],
+)
+async def test_playback_commands_on_a_follower_are_refused(
+    real_controller: PlayerController, command: str, args: tuple[object, ...]
+) -> None:
+    """A command for the playback of a light that follows fails and reaches no player."""
+    leader, _, light_id = _follower_and_leader(real_controller)
+    with (
+        patch.object(leader, "pause", AsyncMock()) as leader_pause,
+        patch.object(leader, "stop", AsyncMock()) as leader_stop,
+        pytest.raises(PlayerCommandFailed, match="follows Patio"),
+    ):
+        await getattr(real_controller, command)(light_id, *args)
+    leader_pause.assert_not_awaited()
+    leader_stop.assert_not_awaited()
+
+
+async def test_play_media_on_a_follower_is_refused(real_controller: PlayerController) -> None:
+    """Media sent to a light that follows is refused rather than played by its leader."""
+    _, _, light_id = _follower_and_leader(real_controller)
+    with pytest.raises(PlayerCommandFailed, match="follows Patio"):
+        await real_controller.play_media(light_id, MagicMock())
+
+
+def test_the_leader_of_a_follower_is_not_refused(real_controller: PlayerController) -> None:
+    """Only the follower is refused: its leader is controlled as usual."""
+    _, leader_id, _ = _follower_and_leader(real_controller)
+    leader = real_controller.get_player(leader_id)
+    assert leader is not None
+    real_controller._refuse_follower(leader)

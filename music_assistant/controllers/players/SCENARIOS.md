@@ -2109,7 +2109,7 @@ the Hue Lights Sync provider runs as a Sendspin light. Patio can group with the 
 two share no protocol. The user adds the light to Patio: the light follows Patio instead of
 joining a protocol group, so Patio does not move to Sendspin and keeps playing natively. The
 light shows as synced to Patio, Patio lists it as a member, and it has no part in Patio's group
-volume. The lights take the features of the audio Patio already plays, read from the buffer of
+volume, and a playback command sent to the light is refused rather than passed on to Patio. The lights take the features of the audio Patio already plays, read from the buffer of
 its queue item and timed to the position Patio reports; at a seek or a track change they start
 again from where Patio is. The user removes the light, or ungroups it: it stops following and
 Patio plays on. A leader that already plays over Sendspin takes the light into that group as any
@@ -2128,6 +2128,8 @@ follows.
   - `tests/controllers/players/test_grouping_plan.py::test_detaching_a_follower_unfollows_it`
   - `tests/controllers/players/test_grouping_plan.py::test_a_follower_joins_once_its_leader_plays_over_its_protocol`
   - `tests/controllers/players/test_grouping_executor.py::test_followers_join_the_group_once_it_plays_over_their_protocol`
+  - `tests/controllers/players/test_follow.py::test_playback_commands_on_a_follower_are_refused`
+  - `tests/controllers/players/test_follow.py::test_play_media_on_a_follower_is_refused`
   - `tests/providers/hue_entertainment/test_follow.py::test_a_seek_reanchors_once_it_holds`
   - `tests/providers/hue_entertainment/test_follow.py::test_a_jump_to_the_start_waits_for_the_next_item`
 

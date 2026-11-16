@@ -799,6 +799,9 @@ already plays from the buffer of its queue item, timed to the leader's reported 
   (`register_bridge_follow_handler`), and `SendspinVisualizerPlayer` hands the calls to it. A sync
   group does not hold its members on a protocol for a member that follows.
 
+- **Commands.** A playback command for a follower (play, pause, stop, next, previous, seek,
+  shuffle, repeat, play media) is refused (`_refuse_follower`) instead of going to its leader as
+  it would for a synced player: the light plays nothing itself.
 - **Becoming a member.** After a join or a regroup, `_join_followers` checks the leader again
   (`followers_to_join`): once the group plays over a follower's protocol, for instance because a
   Sendspin speaker joined and moved it onto Sendspin, the follower stops following and joins the

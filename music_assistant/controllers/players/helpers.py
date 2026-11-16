@@ -142,8 +142,10 @@ def handle_player_command[PlayerControllerT: "_PlayerControllerBase", **P, R](  
             if current_user and not has_player_access(current_user, player.player_id, player):
                 msg = f"{current_user.username} does not have access to player {player.name}"
                 raise InsufficientPermissions(msg)
-            if to_playback_owner and (owner := self._resolve_playback_owner(player)) is not player:
-                self.check_player_access(owner.player_id)
+            if to_playback_owner:
+                self._refuse_follower(player)
+                if (owner := self._resolve_playback_owner(player)) is not player:
+                    self.check_player_access(owner.player_id)
 
             self.logger.debug(
                 "Handling command %s for player %s (%s)",

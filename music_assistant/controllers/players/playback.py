@@ -332,6 +332,8 @@ class PlaybackMixin(_PlayerControllerBase):
         :param player_id: player_id of the player to handle the command.
         :param media: The Media that needs to be played on the player.
         """
+        if (follower := self.get_player(player_id)) is not None:
+            self._refuse_follower(follower)
         # An explicit play_media on a captured player honors the player's
         # CONF_PLAY_MEDIA_OVERRIDES_GROUP preference (default: True) — the
         # player is released from its group/sync first, then plays the media

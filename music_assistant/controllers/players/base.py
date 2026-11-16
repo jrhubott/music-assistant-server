@@ -15,6 +15,7 @@ from music_assistant_models.enums import PlaybackState, PlayerType
 from music_assistant_models.errors import (
     AlreadyRegisteredError,
     InsufficientPermissions,
+    PlayerCommandFailed,
     PlayerUnavailableError,
 )
 from music_assistant_models.player_control import PlayerControl  # noqa: TC002
@@ -589,6 +590,25 @@ class _PlayerControllerBase(CoreController):
             msg = f"Player {player.name} is switched off"
             raise PlayerUnavailableError(msg)
         return player
+
+    def _refuse_follower(self, player: Player) -> None:
+        """
+        Refuse a playback command on a player that follows another one.
+
+        A follower renders nothing of its own: what it shows is what its leader plays, so a
+        command for its playback is no command for the leader either.
+
+        :param player: The player the command is for.
+        """
+        if (leader_id := self.followed_player(player.player_id)) is None:
+            return
+        leader = self.get_player(leader_id)
+        leader_name = leader.name if leader is not None else leader_id
+        msg = (
+            f"Player {player.name} follows {leader_name} and plays nothing itself: "
+            f"control {leader_name} instead"
+        )
+        raise PlayerCommandFailed(msg)
 
     def _get_player_with_redirect(self, player_id: str) -> Player:
         """Get player with check if playback related command should be redirected."""
