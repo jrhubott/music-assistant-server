@@ -2515,6 +2515,8 @@
   "provider.sendspin.config_entries.dynamic_pin_channel_speaker.label": "Enter the code the device speaks aloud",
   "provider.sendspin.config_entries.flow_mode_sample_rate.description": "Select the sample rate of the audio sent to this player. By default, it follows the sample rate of the first track that is played. Only applies when the preferred audio format is set to automatic.",
   "provider.sendspin.config_entries.flow_mode_sample_rate.label": "Sample rate selection",
+  "provider.sendspin.config_entries.follow_delay_ms.description": "When this light follows a speaker that plays over its own protocol (AirPlay, Chromecast, Sonos...), render the light effects this many milliseconds later than the position the speaker reports. Increase if the lights run ahead of the music, decrease (or go negative) if they lag it.",
+  "provider.sendspin.config_entries.follow_delay_ms.label": "Delay while following a speaker (ms)",
   "provider.sendspin.config_entries.management_dynamic_pin_disable.description": "Stop the device from accepting new pairings using a dynamic pairing code it provides while pairing.",
   "provider.sendspin.config_entries.management_dynamic_pin_disable.label": "Disable dynamic pairing code",
   "provider.sendspin.config_entries.management_dynamic_pin_enable.description": "Let the device accept new pairings using a dynamic pairing code it provides while pairing.",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -190,6 +191,48 @@ def test_a_missing_buffer_is_retried_after_a_while() -> None:
     world.loop_time = 2.0
     world.tick()
     assert len(world.starts) == 2
+
+
+def test_the_delay_moves_the_anchor_later() -> None:
+    """A follow delay anchors the feed that much later than the reported position."""
+    world = _World()
+    world.session.set_delay(300_000)
+    world.now_us = 10_000_000
+    world.play("a", 30.0)
+    world.session._tick()
+
+    assert world.starts == [("a", 30.0, 10_000_000 - 30_000_000 + 300_000)]
+
+
+def test_a_changed_delay_restarts_the_feed_on_the_next_tick() -> None:
+    """A delay change re-anchors at once, even when it is smaller than a jump."""
+    world = _World()
+    world.play("a", 30.0)
+    world.session._tick()
+
+    world.session.set_delay(-100_000)
+    world.tick()
+
+    assert len(world.starts) == 2
+    _, position_s, anchor_us = world.starts[1]
+    assert anchor_us == world.now_us - int(position_s * 1_000_000) - 100_000
+
+
+def test_a_live_source_is_logged_once(caplog: pytest.LogCaptureFixture) -> None:
+    """A player that plays something no queue holds is logged once, and starts no feed."""
+    world = _World()
+    world.player.name = "Kitchen"
+    world.player.active_source = "spotify_connect"
+    world.player.playback_state = PlaybackState.PLAYING
+    world.player.current_media = SimpleNamespace(
+        source_id="spotify_connect", queue_item_id=None, palette=None
+    )
+    with caplog.at_level(logging.INFO):
+        world.session._tick()
+        world.session._tick()
+
+    assert world.starts == []
+    assert len([r for r in caplog.records if "no Music Assistant queue" in r.message]) == 1
 
 
 def _format(content_type: ContentType, bit_depth: int) -> AudioFormat:

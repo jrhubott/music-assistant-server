@@ -90,6 +90,7 @@ class FollowSession:
         bridge: HueEntertainmentBridge,
         player_id: str,
         visualizer_request: VisualizerStatePayload,
+        delay_us: int = 0,
     ) -> None:
         """
         Initialize the session.
@@ -97,6 +98,7 @@ class FollowSession:
         :param bridge: The bridge the features go to.
         :param player_id: The player to follow.
         :param visualizer_request: The features the bridge asks for.
+        :param delay_us: How much later the lights render than the position the player reports.
         """
         self.bridge = bridge
         self.mass = bridge.mass
@@ -113,10 +115,26 @@ class FollowSession:
         self._retry_at = 0.0
         # consecutive ticks the playhead of the fed item reported a jump
         self._jump_ticks = 0
+        self._delay_us = delay_us
+        # the source last logged as one the lights cannot follow, to log it once
+        self._unfollowable_source: str | None = None
+        # set when the delay changed: the next tick restarts the feed on the new anchor
+        self._restart = False
 
     def start(self) -> None:
         """Start following."""
         self._task = self.mass.create_task(self._run())
+
+    def set_delay(self, delay_us: int) -> None:
+        """
+        Change how much later the lights render than the position the player reports.
+
+        :param delay_us: The delay in microseconds; negative renders earlier.
+        """
+        if delay_us == self._delay_us:
+            return
+        self._delay_us = delay_us
+        self._restart = True
 
     async def stop(self) -> None:
         """Stop following and let the lights go."""
@@ -144,13 +162,16 @@ class FollowSession:
         player = self.mass.players.get_player(self.player_id)
         target = self._playing_item(player)
         if target is None:
+            self._log_unfollowable_source(player)
             self._end_feed()
             return
+        self._unfollowable_source = None
         queue_item, position_s = target
         now_us = self.bridge.sendspin_server.clock.now_us()
-        anchor_us = now_us - int(position_s * 1_000_000)
+        anchor_us = now_us - int(position_s * 1_000_000) + self._delay_us
         self._apply_palette(player)
-        if queue_item.queue_item_id != self._item_id:
+        if self._restart or queue_item.queue_item_id != self._item_id:
+            self._restart = False
             self._start_feed(queue_item, position_s, anchor_us)
             return
         moved = self._anchor_us is not None and abs(anchor_us - self._anchor_us) > _REANCHOR_US
@@ -354,6 +375,31 @@ class FollowSession:
         ]
         if beats:
             self.bridge.follow_beats(beats)
+
+    def _log_unfollowable_source(self, player: Player | None) -> None:
+        """
+        Log once that the followed player plays a source the lights cannot follow.
+
+        Only a queue item's audio is buffered for the lights to read; a live source such as
+        Spotify Connect, an AirPlay receiver or a line-in streams straight to the player.
+
+        :param player: The followed player.
+        """
+        if player is None or player.playback_state != PlaybackState.PLAYING:
+            return
+        media = player.current_media
+        if media is not None and media.queue_item_id:
+            return
+        source = player.active_source or "an external source"
+        if source == self._unfollowable_source:
+            return
+        self._unfollowable_source = source
+        self.logger.info(
+            "%s plays %s, which is no Music Assistant queue: the lights only follow what a "
+            "queue plays, so they stay dark",
+            player.name,
+            source,
+        )
 
     def _apply_palette(self, player: Player | None) -> None:
         """

@@ -793,11 +793,17 @@ already plays from the buffer of its queue item, timed to the leader's reported 
 - **State.** `StateInputs.followers` adds the followers to the leader's `group_members`, after its
   protocol members; `StateInputs.follows` makes the follower read as synced to its leader. A leader
   lists the players that can follow it (`followable`) in `can_group_with` without a common
-  protocol, and leaves its followers out of group volume.
+  protocol, and leaves its followers out of group volume. The follower names its leader in
+  `extra_attributes["follows"]` (`ATTR_FOLLOWS`), so a client can tell it from a protocol member.
 - **Provider side.** A protocol that can follow reports `can_follow` and implements `follow` and
   `unfollow`. For Sendspin, a bridge registers a `BridgeFollowHandler` for its client
   (`register_bridge_follow_handler`), and `SendspinVisualizerPlayer` hands the calls to it. A sync
-  group does not hold its members on a protocol for a member that follows.
+  group does not hold its members on a protocol for a member that follows. The visualizer player
+  offers a `follow_delay_ms` setting while its bridge can follow, and hands it to the handler
+  (`set_follow_delay`) before it follows and whenever the setting changes. The Hue bridge reads
+  the audio of the queue item the leader plays from its buffer; a live source (Spotify Connect,
+  an AirPlay receiver, a line-in) has no such buffer, so the lights stay dark and the bridge logs
+  why once per source.
 
 - **Commands.** A playback command for a follower (play, pause, stop, next, previous, seek,
   shuffle, repeat, play media) is refused (`_refuse_follower`) instead of going to its leader as

@@ -106,6 +106,7 @@ class HueEntertainmentBridge:
         self._hue_latency_us: int = get_hue_latency_ms(self.provider.config) * 1000
         self._visualizer_request: VisualizerStatePayload | None = None
         self._follow_session: FollowSession | None = None
+        self._follow_delay_us = 0
         self._sendspin_prov: SendspinProvider | None = None
 
     @property
@@ -252,7 +253,9 @@ class HueEntertainmentBridge:
                 return
             await self._follow_session.stop()
         self.logger.info("'%s' follows %s", self.target.name, player_id)
-        self._follow_session = FollowSession(self, player_id, self._visualizer_request)
+        self._follow_session = FollowSession(
+            self, player_id, self._visualizer_request, delay_us=self._follow_delay_us
+        )
         self._follow_session.start()
 
     async def unfollow(self) -> None:
@@ -264,6 +267,16 @@ class HueEntertainmentBridge:
         )
         session, self._follow_session = self._follow_session, None
         await session.stop()
+
+    def set_follow_delay(self, delay_ms: int) -> None:
+        """
+        Set how much later the lights render than the position a followed player reports.
+
+        :param delay_ms: The delay in milliseconds; negative renders earlier.
+        """
+        self._follow_delay_us = delay_ms * 1000
+        if self._follow_session is not None:
+            self._follow_session.set_delay(self._follow_delay_us)
 
     def follow_stream_start(self) -> None:
         """Bring the lights up for a followed player's audio."""

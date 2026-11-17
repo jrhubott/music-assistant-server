@@ -15,6 +15,8 @@ from music_assistant.providers.sendspin.player import SendspinVisualizerPlayer
 from music_assistant.providers.sendspin.provider import SendspinProvider
 
 if TYPE_CHECKING:
+    from music_assistant_models.config_entries import PlayerConfig
+
     from music_assistant.models.player_provider import PlayerProvider
 
 CLIENT_ID = "hue-area"
@@ -43,18 +45,26 @@ def visualizer(monkeypatch: pytest.MonkeyPatch) -> SendspinVisualizerPlayer:
         self._protocol_id = protocol_id
         self._player = None
         self._attr_can_group_with = set()
+        self._config = cast(
+            "PlayerConfig",
+            SimpleNamespace(get_value=lambda key, default=None: follow_config.get(key, default)),
+        )
+
+    follow_config: dict[str, int] = {}
 
     monkeypatch.setattr(PlayerProtocol, "__init__", _init_player)
     monkeypatch.setattr(player_module.SendspinBasePlayer, "_refresh_client_info", Mock())
     monkeypatch.setattr(SendspinVisualizerPlayer, "_subscribe_client_callbacks", Mock())
     monkeypatch.setattr(player_module, "SendspinPlaybackSession", Mock())
     monkeypatch.setattr(PlayerProtocol, "display_name", property(lambda _self: "Light"))
-    return SendspinVisualizerPlayer(_provider(), CLIENT_ID)
+    player = SendspinVisualizerPlayer(_provider(), CLIENT_ID)
+    player.follow_config = follow_config  # type: ignore[attr-defined]
+    return player
 
 
 def _handler() -> Mock:
     """Return a follow handler whose calls are recorded."""
-    return Mock(follow=AsyncMock(), unfollow=AsyncMock())
+    return Mock(follow=AsyncMock(), unfollow=AsyncMock(), set_follow_delay=Mock())
 
 
 async def test_a_registered_handler_lets_the_player_follow(
@@ -90,3 +100,40 @@ async def test_an_unregistered_handler_ends_following(visualizer: SendspinVisual
 
     assert not visualizer.can_follow
     assert provider.get_bridge_follow_handler(CLIENT_ID) is None
+
+
+async def test_the_follow_delay_goes_to_the_handler(visualizer: SendspinVisualizerPlayer) -> None:
+    """The configured delay reaches the bridge before it follows, and again when changed."""
+    handler = _handler()
+    cast("SendspinProvider", visualizer.provider).register_bridge_follow_handler(CLIENT_ID, handler)
+    follow_config = visualizer.follow_config  # type: ignore[attr-defined]
+    follow_config[player_module.CONF_FOLLOW_DELAY_MS] = 250
+
+    await visualizer.follow("leader")
+    handler.set_follow_delay.assert_called_with(250)
+
+    follow_config[player_module.CONF_FOLLOW_DELAY_MS] = -100
+    await visualizer.on_config_updated()
+    handler.set_follow_delay.assert_called_with(-100)
+
+
+async def test_only_a_player_that_can_follow_offers_the_delay(
+    visualizer: SendspinVisualizerPlayer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The follow delay setting is shown only while the bridge can follow."""
+    monkeypatch.setattr(
+        player_module.SendspinBasePlayer, "get_config_entries", AsyncMock(return_value=[])
+    )
+    assert not [
+        entry
+        for entry in await visualizer.get_config_entries()
+        if entry.key == player_module.CONF_FOLLOW_DELAY_MS
+    ]
+    cast("SendspinProvider", visualizer.provider).register_bridge_follow_handler(
+        CLIENT_ID, _handler()
+    )
+    assert [
+        entry
+        for entry in await visualizer.get_config_entries()
+        if entry.key == player_module.CONF_FOLLOW_DELAY_MS
+    ]

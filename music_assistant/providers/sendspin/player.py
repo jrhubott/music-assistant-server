@@ -185,6 +185,7 @@ _OUTPUT_DELAY_COMMANDS = frozenset({PlayerCommand.SET_OUTPUT_DELAY, PlayerComman
 
 # Config constants for Sendspin audio format
 CONF_PREFERRED_SENDSPIN_FORMAT = "preferred_sendspin_format"
+CONF_FOLLOW_DELAY_MS = "follow_delay_ms"
 SENDSPIN_FORMAT_AUTOMATIC = "automatic"
 
 # Player types that can render a line-in, so groups and pairs stay selectable.
@@ -3291,12 +3292,35 @@ class SendspinVisualizerPlayer(SendspinBasePlayer):
         """
         if (handler := self._follow_handler) is None:
             raise PlayerCommandFailed(f"{self.display_name} can not follow another player")
+        handler.set_follow_delay(self._follow_delay_ms)
         await handler.follow(player_id)
 
     async def unfollow(self) -> None:
         """Stop following, through the bridge of this client."""
         if (handler := self._follow_handler) is not None:
             await handler.unfollow()
+
+    async def get_config_entries(self) -> list[ConfigEntry]:
+        """Return all (provider/player specific) Config Entries for the player."""
+        entries = await super().get_config_entries()
+        if self.can_follow:
+            entries.append(
+                ConfigEntry(
+                    key=CONF_FOLLOW_DELAY_MS,
+                    type=ConfigEntryType.INTEGER,
+                    default_value=0,
+                    range=(-2000, 5000),
+                    immediate_apply=True,
+                    category="advanced",
+                )
+            )
+        return entries
+
+    async def on_config_updated(self) -> None:
+        """Apply a changed follow delay to the bridge of this client."""
+        await super().on_config_updated()
+        if (handler := self._follow_handler) is not None:
+            handler.set_follow_delay(self._follow_delay_ms)
 
     async def set_members(
         self,
@@ -3395,6 +3419,12 @@ class SendspinVisualizerPlayer(SendspinBasePlayer):
             )
             return
         await self.mass.players.cmd_play(groups[0].player_id)
+
+    @property
+    def _follow_delay_ms(self) -> int:
+        """Return the configured delay of the lights while following a player."""
+        value = self.config.get_value(CONF_FOLLOW_DELAY_MS, 0)
+        return int(float(str(value))) if value is not None else 0
 
     @property
     def _follow_handler(self) -> BridgeFollowHandler | None:

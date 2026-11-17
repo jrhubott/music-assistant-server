@@ -65,6 +65,13 @@ class BridgeFollowHandler(Protocol):
     async def unfollow(self) -> None:
         """Stop following."""
 
+    def set_follow_delay(self, delay_ms: int) -> None:
+        """
+        Set how much later the lights render than the position the followed player reports.
+
+        :param delay_ms: The delay in milliseconds; negative renders earlier.
+        """
+
 
 class BridgePlayerRole(Role):
     """
