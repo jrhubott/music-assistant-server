@@ -1214,13 +1214,16 @@ class SyncGroupPlayer(PlayerProtocol):
         Return True if every current member has a playback path on the given domain.
 
         Members that are unavailable or expose no playback path at all are
-        ignored, so they never hold the group on a protocol.
+        ignored, so they never hold the group on a protocol. So are members that follow the
+        leader instead of joining its protocol group (a light): they need no common protocol.
 
         :param domain: The playback path domain to check (e.g. "airplay", "sonos").
         """
         for member_id in self._attr_group_members:
             member = self.mass.players.get_player(member_id)
             if member is None or not _is_online(member):
+                continue
+            if (own := member.own_protocol) is not None and own.can_follow:
                 continue
             paths = member.playback_domains
             if paths and domain not in paths:

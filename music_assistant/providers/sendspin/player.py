@@ -352,6 +352,7 @@ if TYPE_CHECKING:
     from music_assistant.providers.chromecast.sendspin_bridge import SendspinBridgeManager
     from music_assistant.providers.hass import HomeAssistantProvider
 
+    from .bridge_role import BridgeFollowHandler
     from .provider import PinPairingSession, SendspinProvider
 
 
@@ -3277,6 +3278,26 @@ class SendspinVisualizerPlayer(SendspinBasePlayer):
         self._attr_can_group_with = {provider.instance_id}
         self._attr_supported_features = {PlayerFeature.SET_MEMBERS}
 
+    @property
+    def can_follow(self) -> bool:
+        """Return whether the bridge of this client can follow a leader."""
+        return self._follow_handler is not None
+
+    async def follow(self, player_id: str) -> None:
+        """
+        Start following what a player plays, through the bridge of this client.
+
+        :param player_id: The player to follow.
+        """
+        if (handler := self._follow_handler) is None:
+            raise PlayerCommandFailed(f"{self.display_name} can not follow another player")
+        await handler.follow(player_id)
+
+    async def unfollow(self) -> None:
+        """Stop following, through the bridge of this client."""
+        if (handler := self._follow_handler) is not None:
+            await handler.unfollow()
+
     async def set_members(
         self,
         player_ids_to_add: list[str] | None = None,
@@ -3374,6 +3395,11 @@ class SendspinVisualizerPlayer(SendspinBasePlayer):
             )
             return
         await self.mass.players.cmd_play(groups[0].player_id)
+
+    @property
+    def _follow_handler(self) -> BridgeFollowHandler | None:
+        """Return the follow handler the bridge of this client registered, if any."""
+        return cast("SendspinProvider", self.provider).get_bridge_follow_handler(self.protocol_id)
 
 
 class SendspinSourcePlayer(SendspinBasePlayer):

@@ -145,6 +145,9 @@ class PlayerController(
         # the players whose power control, which cuts their power, read off or was
         # switched off, by player id: whether their power counts as cut by now
         self._power_cuts: dict[str, bool] = {}
+        # the players that follow another player instead of joining its group (a light that
+        # takes the leader's buffered audio), by follower id: the id of the followed player
+        self._follows: dict[str, str] = {}
         # Subscribers for player state updates (called with player + changed_values)
         self._state_update_subscribers: list[
             Callable[[Player, dict[str, tuple[Any, Any]]], None]

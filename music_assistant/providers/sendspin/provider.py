@@ -138,6 +138,7 @@ if TYPE_CHECKING:
 
     from music_assistant.controllers.webserver.auth import AuthenticationManager
     from music_assistant.providers.hass import HomeAssistantProvider
+    from music_assistant.providers.sendspin.bridge_role import BridgeFollowHandler
 
 
 DEFAULT_SENDSPIN_CLIENT_PORT = 8928
@@ -412,6 +413,7 @@ class SendspinProvider(PlayerProvider):
         self._bridge_holders = {}
         self._bridge_static_delay_defaults = {}
         self._bridge_player_types: dict[str, PlayerType] = {}
+        self._bridge_follow_handlers: dict[str, BridgeFollowHandler] = {}
         self._client_event_versions = {}
         self._client_event_task_counts = {}
         self._virtual_players = {}
@@ -715,6 +717,31 @@ class SendspinProvider(PlayerProvider):
         player (e.g. PlayerType.LIGHT for Hue Entertainment bridges).
         """
         self._bridge_player_types[client_id] = player_type
+
+    def register_bridge_follow_handler(
+        self, client_id: str, handler: BridgeFollowHandler | None
+    ) -> None:
+        """
+        Register (or with None remove) how the player of a bridge client follows a leader.
+
+        Kept for as long as the bridge runs, so a player created again for the client can
+        follow too.
+
+        :param client_id: The bridge client_id.
+        :param handler: The handler the player hands following to.
+        """
+        if handler is None:
+            self._bridge_follow_handlers.pop(client_id, None)
+        else:
+            self._bridge_follow_handlers[client_id] = handler
+
+    def get_bridge_follow_handler(self, client_id: str) -> BridgeFollowHandler | None:
+        """
+        Return the follow handler registered for a bridge client.
+
+        :param client_id: The bridge client_id.
+        """
+        return self._bridge_follow_handlers.get(client_id)
 
     async def apply_bridge_claim(
         self,

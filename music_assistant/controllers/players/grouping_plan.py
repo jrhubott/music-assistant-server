@@ -133,6 +133,9 @@ class PlayerView:
     :param active_output: Its active output: "native", a protocol id, or None.
     :param preferred_output: The output its config prefers.
     :param active_queue: The queue it plays, if any.
+    :param follows: The player it follows instead of joining its group.
+    :param followers: The players that follow it.
+    :param can_follow: Its own protocol can follow a leader instead of joining its group.
     """
 
     player_id: str
@@ -157,6 +160,9 @@ class PlayerView:
     active_output: str | None = None
     preferred_output: str | None = None
     active_queue: QueueView | None = None
+    follows: str | None = None
+    followers: tuple[str, ...] = ()
+    can_follow: bool = False
 
     def output_by_domain(self, domain: str) -> OutputView | None:
         """
@@ -521,6 +527,21 @@ class TransferLeadership:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class Follow:
+    """Let a player follow a leader instead of joining its protocol group."""
+
+    leader_id: str
+    member_id: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Unfollow:
+    """Let a player stop following its leader."""
+
+    member_id: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Note:
     """A line for the log about a decision the plan took."""
 
@@ -548,6 +569,8 @@ type GroupStep = (
     | GroupCommand
     | ReleaseSession
     | TransferLeadership
+    | Follow
+    | Unfollow
     | Note
     | Refuse
 )
@@ -1525,6 +1548,7 @@ class _Planner(GroupRules):
             stop_after = True
         admitted = self._admit(target, add)
         accepted = self._accept_removals(target, remove)
+        admitted, accepted = self._divert_followers(target, admitted, accepted)
         # GROUP players (sync_group, universal_group) manage their own members internally
         # and don't need protocol translation - call their set_members directly
         if (
@@ -1542,12 +1566,79 @@ class _Planner(GroupRules):
                 )
             )
             return
+        if not admitted and not accepted and not stop_after and self._follow_steps():
+            # only followers changed: no protocol group to join
+            return
         self.join = Join(
             target_id=target.player_id,
             add=tuple(admitted),
             remove=tuple(accepted),
             stop_after=stop_after,
         )
+
+    def _divert_followers(
+        self, target: PlayerView, admitted: list[str], accepted: list[str]
+    ) -> tuple[list[str], list[str]]:
+        """
+        Take the members that follow the leader, or are to, out of the protocol join.
+
+        A player that renders no audio and can follow joins a leader that plays over
+        another protocol than its own as a follower: the leader keeps its output, where a
+        protocol join would move it onto the one protocol both have.
+
+        :param target: The leader.
+        :param admitted: The members that join.
+        :param accepted: The members that leave.
+        :return: The members that join and leave through the protocol group.
+        """
+        joining: list[str] = []
+        for member_id in admitted:
+            member = self.snapshot.player(member_id)
+            if member is not None and self._follows_instead(target, member):
+                self._note(
+                    logging.INFO,
+                    "Player %s follows %s, which keeps playing over its own protocol",
+                    member.name,
+                    target.name,
+                )
+                self.steps.append(Follow(leader_id=target.player_id, member_id=member.player_id))
+            else:
+                joining.append(member_id)
+        leaving: list[str] = []
+        for member_id in accepted:
+            member = self.snapshot.player(member_id)
+            if member is not None and member.follows == target.player_id:
+                self.steps.append(Unfollow(member_id=member.player_id))
+            else:
+                leaving.append(member_id)
+        return joining, leaving
+
+    def _follows_instead(self, target: PlayerView, member: PlayerView) -> bool:
+        """
+        Return whether a member follows the leader instead of joining its protocol group.
+
+        :param target: The leader.
+        :param member: The member.
+        """
+        if not member.can_follow or member.type in PLAYBACK_TARGET_TYPES:
+            return False
+        if target.type not in (PlayerType.PLAYER, PlayerType.STEREO_PAIR):
+            return False
+        member_own = self.snapshot.own(member)
+        if member_own is None:
+            return False
+        # a leader that already plays over the member's protocol takes it into that group
+        if target.active_output not in (None, "native"):
+            output = self.snapshot.protocols.get(target.active_output)
+            leader_domain = output.domain if output is not None else None
+        else:
+            leader_own = self.snapshot.own(target)
+            leader_domain = leader_own.domain if leader_own is not None else None
+        return leader_domain != member_own.domain
+
+    def _follow_steps(self) -> bool:
+        """Return whether the plan lets a player start or stop following."""
+        return any(isinstance(step, (Follow, Unfollow)) for step in self.steps)
 
     def _ungroup(self) -> None:
         """Take a player out of whatever holds it."""
@@ -1603,6 +1694,10 @@ class _Planner(GroupRules):
     def _detach(self) -> None:
         """Take a synced member out of its leader's group."""
         member = self._player(self.change.target_id)
+        if member.follows is not None:
+            # following is no protocol group: there is nothing to leave on a device
+            self.steps.append(Unfollow(member_id=member.player_id))
+            return
         parent = self.snapshot.player(member.synced_to) if member.synced_to else None
         if parent and parent.available_for_playback:
             self._note(
@@ -1873,6 +1968,9 @@ class _Planner(GroupRules):
             player.synced_to,
             context,
         )
+        if player.follows is not None:
+            self.steps.append(Unfollow(member_id=player.player_id))
+            return
         self.steps.append(
             Detach(
                 member_id=player.player_id,

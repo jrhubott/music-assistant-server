@@ -772,6 +772,36 @@ entry; the plan decides how. A group player's provider (sync group, universal gr
 own members, its leader and when it forms, and reaches the plan through `_handle_set_members` on
 its leader.
 
+### Followers
+
+A player that renders no audio can follow a leader instead of joining a protocol group with it. It
+needs no protocol in common with the leader, so the leader keeps its output. Today that is a Hue
+entertainment area: a Sendspin light whose bridge reads the features of the audio the leader
+already plays from the buffer of its queue item, timed to the leader's reported position.
+
+- **Who follows.** The planner (`_divert_followers` in `_Planner._members`) takes a member out of
+  the protocol join and plans `Follow(leader_id, member_id)` when the member is not a playback
+  target, its own protocol reports `can_follow`, the leader is a player or a stereo pair, and the
+  leader does not already play over the member's protocol domain. A leader that already plays over
+  Sendspin takes the light into that group like any other member.
+- **What leaves.** Removing or ungrouping a follower plans `Unfollow(member_id)`, as do the release
+  of a follower before it joins elsewhere and the detach of a follower. Removing a player, and the
+  membership cleanup of a player that leaves or goes away, let it and its followers go.
+- **Registry.** The controller keeps who follows whom (`_follows`, follower to leader), and
+  `_follow` / `_unfollow` call `PlayerProtocol.follow` / `unfollow` and update both players.
+  `followed_player` and `followers_of` read it.
+- **State.** `StateInputs.followers` adds the followers to the leader's `group_members`, after its
+  protocol members; `StateInputs.follows` makes the follower read as synced to its leader. A leader
+  lists the players that can follow it (`followable`) in `can_group_with` without a common
+  protocol, and leaves its followers out of group volume.
+- **Provider side.** A protocol that can follow reports `can_follow` and implements `follow` and
+  `unfollow`. For Sendspin, a bridge registers a `BridgeFollowHandler` for its client
+  (`register_bridge_follow_handler`), and `SendspinVisualizerPlayer` hands the calls to it. A sync
+  group does not hold its members on a protocol for a member that follows.
+
+Not done yet: a follower is not turned into a Sendspin member when the leader's group later moves
+to Sendspin. See GROUP-59 in [SCENARIOS.md](SCENARIOS.md).
+
 ## Locking
 
 Player commands are serialized per player and purpose with `get_player_lock` ([locks.py](locks.py)):

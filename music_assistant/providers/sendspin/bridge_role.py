@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from aiosendspin.models.core import ServerStateMessage
 from aiosendspin.models.visualizer import BeatAvailability, StreamStartVisualizer
@@ -44,6 +44,26 @@ BRIDGE_BYTES_PER_SAMPLE = BRIDGE_BIT_DEPTH // 8
 BRIDGE_ROLE_ID = "player@_bridge"
 VISUALIZER_BRIDGE_ROLE_ID = "visualizer@_bridge"
 COLOR_BRIDGE_ROLE_ID = "color@_bridge"
+
+
+class BridgeFollowHandler(Protocol):
+    """
+    Following a leader, as a bridge provides it for the non-audio player of its client.
+
+    Registered with the Sendspin provider for a bridge client id: the visualizer or light
+    player of that client can then follow a player that plays over another protocol,
+    taking what it plays from the leader's buffered audio instead of a Sendspin group.
+    """
+
+    async def follow(self, player_id: str) -> None:
+        """
+        Start following what a player plays.
+
+        :param player_id: The player to follow.
+        """
+
+    async def unfollow(self) -> None:
+        """Stop following."""
 
 
 class BridgePlayerRole(Role):

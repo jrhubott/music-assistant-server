@@ -16,6 +16,7 @@ from music_assistant.controllers.players.grouping_plan import (
     ChangeKind,
     Detach,
     Failure,
+    Follow,
     GroupChange,
     GroupingSnapshot,
     GroupPlan,
@@ -25,6 +26,7 @@ from music_assistant.controllers.players.grouping_plan import (
     MemberStage,
     Refuse,
     SetMembers,
+    Unfollow,
     Ungroup,
 )
 
@@ -50,6 +52,8 @@ class _Players:
         self.waits: list[tuple[str, float]] = []
         self._detach_member = AsyncMock()
         self.cmd_set_members = AsyncMock()
+        self._follow = AsyncMock()
+        self._unfollow = AsyncMock()
 
     def get_protocol(self, protocol_id: str) -> Any:
         """Return a protocol by id."""
@@ -255,3 +259,14 @@ async def test_the_change_calls_the_target_object_it_holds() -> None:
     with _plans(GroupPlan((MemberChange(target_id="leader", add=("m",)),))):
         await grouping.apply_group_change(players, CHANGE, held)  # type: ignore[arg-type]
     players._handle_set_members.assert_awaited_once_with(held, player_ids_to_add=["m"])
+
+
+async def test_follow_steps_go_to_the_controller() -> None:
+    """Follow and Unfollow steps start and stop following through the players controller."""
+    players = _Players()
+    plan = GroupPlan((Follow(leader_id="leader", member_id="light"), Unfollow(member_id="other")))
+    with _plans(plan):
+        await grouping.apply_group_change(players, CHANGE)  # type: ignore[arg-type]
+    players._follow.assert_awaited_once_with("leader", "light")
+    players._unfollow.assert_awaited_once_with("other")
+    players._handle_set_members.assert_not_awaited()

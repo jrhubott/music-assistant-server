@@ -4254,3 +4254,27 @@ class TestProtocolLookups:
 
         assert sgp.active_source == "spotify"
         assert sgp.source_list == native.source_list
+
+
+def _domain_member(domains: set[str], *, can_follow: bool = False) -> MagicMock:
+    """Return an online member with the given playback paths."""
+    member = MagicMock(available=True, offline_by_power_control=False, playback_domains=domains)
+    member.own_protocol.can_follow = can_follow
+    return member
+
+
+@pytest.mark.parametrize(
+    ("can_follow", "expected"), [(True, True), (False, False)], ids=["follower", "speaker"]
+)
+def test_a_member_that_follows_does_not_hold_the_group_on_a_protocol(
+    can_follow: bool, expected: bool
+) -> None:
+    """A light that follows the leader needs no Sonos path; a speaker without one does."""
+    members = {
+        "sonos": _domain_member({"sonos", "airplay"}),
+        "light": _domain_member({"sendspin"}, can_follow=can_follow),
+    }
+    sgp = MagicMock(_attr_group_members=list(members))
+    sgp.mass.players.get_player = MagicMock(side_effect=members.get)
+
+    assert SyncGroupPlayer._all_members_can_play_on_domain(sgp, "sonos") is expected

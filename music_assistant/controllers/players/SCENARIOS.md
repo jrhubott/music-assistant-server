@@ -2102,6 +2102,32 @@ as that of Den, which is online.
   - `test_grouping.py::test_an_offline_member_is_removed_from_a_group_player`
   - `test_grouping.py::test_an_offline_member_of_a_fixed_group_is_refused_as_an_online_one`
 
+### GROUP-62 · A light follows a speaker that keeps playing over its own protocol
+
+Patio is a Sonos speaker that plays natively, and Patio Lights is a Hue entertainment area that
+the Hue Lights Sync provider runs as a Sendspin light. Patio can group with the light though the
+two share no protocol. The user adds the light to Patio: the light follows Patio instead of
+joining a protocol group, so Patio does not move to Sendspin and keeps playing natively. The
+light shows as synced to Patio, Patio lists it as a member, and it has no part in Patio's group
+volume. The lights take the features of the audio Patio already plays, read from the buffer of
+its queue item and timed to the position Patio reports; at a seek or a track change they start
+again from where Patio is. The user removes the light, or ungroups it: it stops following and
+Patio plays on. A leader that already plays over Sendspin takes the light into that group as any
+other member. A player that renders audio itself, or whose protocol can not follow, never
+follows.
+
+- End-to-end: **possible with** a native speaker and a light whose bridge can follow; the lab has
+  no stand-in for a Hue bridge.
+- Proven by:
+  - `tests/controllers/players/test_grouping_plan.py::test_a_light_follows_a_leader_that_plays_over_its_own_protocol`
+  - `tests/controllers/players/test_grouping_plan.py::test_a_light_follows_beside_a_speaker_that_joins`
+  - `tests/controllers/players/test_grouping_plan.py::test_a_light_joins_a_leader_that_plays_over_its_protocol`
+  - `tests/controllers/players/test_grouping_plan.py::test_only_a_non_audio_player_that_can_follow_follows`
+  - `tests/controllers/players/test_grouping_plan.py::test_removing_a_follower_unfollows_it`
+  - `tests/controllers/players/test_grouping_plan.py::test_detaching_a_follower_unfollows_it`
+  - `tests/providers/hue_entertainment/test_follow.py::test_a_seek_reanchors_once_it_holds`
+  - `tests/providers/hue_entertainment/test_follow.py::test_a_jump_to_the_start_waits_for_the_next_item`
+
 ## Where playback goes
 
 A player plays through one of its outputs, and what the device plays by itself is steered

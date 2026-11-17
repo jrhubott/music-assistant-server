@@ -236,6 +236,10 @@ class StateInputs:
         it counts: for a source that reports no image of what it is playing.
     :param standing_sources: Audio sources that are selectable on the player without
         a session being active.
+    :param follows: Id of the player this player follows instead of joining its group.
+    :param followers: Ids of the players that follow this player, in the order they started.
+    :param followable: Ids of the players that can follow this player instead of joining
+        a protocol group with it.
     """
 
     player_id: str
@@ -291,6 +295,9 @@ class StateInputs:
     session: AudioSourceSession | None
     session_image_url: str | None
     standing_sources: tuple[AudioSource, ...]
+    follows: str | None = None
+    followers: tuple[str, ...] = ()
+    followable: frozenset[str] = frozenset()
 
 
 @dataclass(slots=True, kw_only=True)
@@ -336,7 +343,7 @@ def derive_player_state(inputs: StateInputs) -> tuple[PlayerState, StateEffects]
     )
     if follows_native_leader:
         inputs = replace(inputs, active_protocol=None, active_output_protocol=None)
-    synced_to = resolve_synced_to(own, inputs.linked, inputs.peers)
+    synced_to = _synced_to(inputs)
     active_group = _active_group(inputs)
     setup_protocol = _protocol_needing_setup(inputs)
     foreign_app = _shown_foreign_app(inputs, synced_to, active_group)
@@ -481,13 +488,24 @@ def resolve_synced_to(
     return None
 
 
+def _synced_to(inputs: StateInputs) -> str | None:
+    """
+    Return the id of the player a player is synced to, or follows.
+
+    A follower is shown as a member of its leader's group, so it reads as synced to it.
+    """
+    if inputs.follows is not None and (leader := inputs.peers.get(inputs.follows)):
+        return leader.player_id
+    return resolve_synced_to(inputs.own, inputs.linked, inputs.peers)
+
+
 def resolve_media_queue(inputs: StateInputs) -> QueueSnapshot | None:
     """
     Return the queue a player takes its current media from, if any.
 
     :param inputs: Everything the state is derived from.
     """
-    synced_to = resolve_synced_to(inputs.own, inputs.linked, inputs.peers)
+    synced_to = _synced_to(inputs)
     active_group = _active_group(inputs)
     foreign_app = _shown_foreign_app(inputs, synced_to, active_group)
     if synced_to or active_group or foreign_app or inputs.session is not None:
@@ -910,6 +928,11 @@ def _group_members(inputs: StateInputs, synced_to: str | None) -> list[str]:
             if member_id not in members:
                 members.append(member_id)
 
+    # followers are no protocol members, but they are in the group all the same
+    for member_id in _player_ids(inputs, inputs.followers):
+        if member_id not in members:
+            members.append(member_id)
+
     if inputs.player_type != PlayerType.GROUP:
         # Ensure the player_id is first in the group_members list
         if len(members) > 0 and members[0] != inputs.player_id:
@@ -997,6 +1020,11 @@ def _can_group_with(
         if candidate.type not in (PlayerType.UNKNOWN, PlayerType.SOURCE)
         and _should_include_player(candidate)
     }
+
+    # players that follow instead of joining a protocol group need no common protocol
+    for candidate in _players(inputs, inputs.followable):
+        if _should_include_player(candidate):
+            result.add(candidate.player_id)
 
     # External source is active - don't include protocol-based grouping
     # When the device plays something MA does not produce (a TV input, line-in, its own
@@ -1304,6 +1332,9 @@ def _volume_members(inputs: StateInputs, state: PlayerState) -> list[PlayerState
                 _playable(inputs) and not inputs.offline_by_power_control
             )
             member = state
+        elif peer and peer.player_id in inputs.followers:
+            # a follower renders no audio, so it has no part in the group volume
+            continue
         elif peer:
             available_for_playback = peer.available_for_playback
             member = peer.state

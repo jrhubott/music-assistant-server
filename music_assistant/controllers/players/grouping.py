@@ -24,6 +24,7 @@ from music_assistant.constants import CONF_PLAYERS, CONF_PREFERRED_OUTPUT_PROTOC
 from music_assistant.controllers.players.grouping_plan import (
     Detach,
     Failure,
+    Follow,
     GroupChange,
     GroupCommand,
     GroupingSnapshot,
@@ -45,6 +46,7 @@ from music_assistant.controllers.players.grouping_plan import (
     ReleaseSession,
     SetMembers,
     TransferLeadership,
+    Unfollow,
     Ungroup,
     plan_group_change,
 )
@@ -425,6 +427,10 @@ class _GroupRun:
                 await players._transfer_ad_hoc_leadership(
                     self.player(step.leader_id), list(step.remaining)
                 )
+            case Follow():
+                await players._follow(step.leader_id, step.member_id)
+            case Unfollow():
+                await players._unfollow(step.member_id)
             case Refuse():
                 raise self.error(step)
 
@@ -560,6 +566,9 @@ def _player_view(players: _PlayerControllerBase, player: Player) -> PlayerView:
             players.mass.config.get_player_value(player.player_id, CONF_PREFERRED_OUTPUT_PROTOCOL),
         ),
         active_queue=_queue_view(players.get_active_queue(player)),
+        follows=players.followed_player(player.player_id),
+        followers=tuple(players.followers_of(player.player_id)),
+        can_follow=own is not None and own.can_follow,
     )
 
 

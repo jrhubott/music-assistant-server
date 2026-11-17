@@ -39,6 +39,7 @@ from .constants import (
     SPECTRUM_F_MIN,
     SPECTRUM_SCALE,
 )
+from .follow import FollowSession
 from .settings import get_brightness, get_color_mode, get_hue_latency_ms
 from .targets import TargetUnavailableError
 
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
         SendspinServer,
     )
     from aiosendspin.server.roles.visualizer.features import ExtractedFrame
+    from music_assistant_models.media_items import MediaItemPalette
 
     from music_assistant.providers.sendspin.provider import SendspinProvider
 
@@ -102,6 +104,14 @@ class HueEntertainmentBridge:
         self._render_handle: asyncio.TimerHandle | None = None
         self._entertainment_starting: bool = False
         self._hue_latency_us: int = get_hue_latency_ms(self.provider.config) * 1000
+        self._visualizer_request: VisualizerStatePayload | None = None
+        self._follow_session: FollowSession | None = None
+        self._sendspin_prov: SendspinProvider | None = None
+
+    @property
+    def follow_session(self) -> FollowSession | None:
+        """Return the session following a player, None while no player is followed."""
+        return self._follow_session
 
     async def start(self) -> None:
         """Start the bridge — register as an in-process Sendspin visualizer client."""
@@ -118,6 +128,9 @@ class HueEntertainmentBridge:
         sendspin_prov: SendspinProvider | None = self.mass.get_provider("sendspin")  # type: ignore[assignment]
         if sendspin_prov:
             sendspin_prov.register_bridge_player_type(client_id, PlayerType.LIGHT)
+            # the light player can follow a speaker that plays over another protocol
+            sendspin_prov.register_bridge_follow_handler(client_id, self)
+            self._sendspin_prov = sendspin_prov
 
         # Beat + small bundle of periodic features. Each periodic frame
         # is ~20-30 bytes; one second's worth fits comfortably under
@@ -145,6 +158,7 @@ class HueEntertainmentBridge:
             ),
             visualizer_support=support,
         )
+        self._visualizer_request = request
         self._sendspin_client = self.sendspin_server.register_external_player(
             hello, on_stream_start=self._on_external_stream_start
         )
@@ -183,6 +197,12 @@ class HueEntertainmentBridge:
 
     async def stop(self) -> None:
         """Stop the bridge."""
+        if self._follow_session is not None:
+            await self._follow_session.stop()
+            self._follow_session = None
+        if self._sendspin_prov is not None:
+            self._sendspin_prov.register_bridge_follow_handler(self.target.client_id, None)
+            self._sendspin_prov = None
         self._cancel_render_loop()
         if self._stop_debounce_task and not self._stop_debounce_task.done():
             self._stop_debounce_task.cancel()
@@ -218,6 +238,76 @@ class HueEntertainmentBridge:
             )
         if hue_latency_ms is not None:
             self._hue_latency_us = hue_latency_ms * 1000
+
+    async def follow(self, player_id: str) -> None:
+        """
+        Make the lights follow what a player plays, leaving that player as it is.
+
+        :param player_id: The player to follow.
+        """
+        if self._visualizer_request is None:
+            raise RuntimeError(f"Bridge for {self.target.name} is not started")
+        if self._follow_session is not None:
+            if self._follow_session.player_id == player_id:
+                return
+            await self._follow_session.stop()
+        self.logger.info("'%s' follows %s", self.target.name, player_id)
+        self._follow_session = FollowSession(self, player_id, self._visualizer_request)
+        self._follow_session.start()
+
+    async def unfollow(self) -> None:
+        """Stop following a player."""
+        if self._follow_session is None:
+            return
+        self.logger.info(
+            "'%s' stops following %s", self.target.name, self._follow_session.player_id
+        )
+        session, self._follow_session = self._follow_session, None
+        await session.stop()
+
+    def follow_stream_start(self) -> None:
+        """Bring the lights up for a followed player's audio."""
+        if self._analyzer is not None:
+            # queued features belong to the previous playhead
+            self._analyzer.clear_beats()
+        self._start_streaming()
+
+    def follow_stream_end(self) -> None:
+        """Let the lights go once the followed player stops playing."""
+        self._schedule_stop()
+
+    def follow_frame(self, frame: ExtractedFrame) -> None:
+        """Queue features extracted from a followed player's audio."""
+        self._queue_frame(frame)
+
+    def follow_beats(self, beats: list[BeatTiming]) -> None:
+        """Append beats of a followed player's audio."""
+        if self._analyzer is not None:
+            self._analyzer.push_beats(beats)
+
+    def follow_beats_clear(self) -> None:
+        """Drop the beats of a followed player's previous audio."""
+        if self._analyzer is not None:
+            self._analyzer.clear_beat_schedule()
+
+    def follow_palette(self, palette: MediaItemPalette) -> None:
+        """Hand the artwork palette of a followed player's media to the analyzer."""
+        if self._analyzer is None:
+            return
+        update = {
+            name: value
+            for name in (
+                "background_dark",
+                "background_light",
+                "primary",
+                "accent",
+                "on_dark",
+                "on_light",
+            )
+            if (value := getattr(palette, name)) is not None
+        }
+        if update:
+            self._analyzer.apply_color_palette(update)
 
     async def _start_entertainment(self) -> None:
         """Open the target's stream, with retry."""
@@ -278,6 +368,12 @@ class HueEntertainmentBridge:
 
     def _on_stream_start(self) -> None:
         """Handle stream start — start entertainment mode + DTLS proactively."""
+        if self._follow_session is not None:
+            return
+        self._start_streaming()
+
+    def _start_streaming(self) -> None:
+        """Start the lights' stream unless it runs or starts, and cancel a pending stop."""
         # Cancel any pending stop from a previous stream end (track transition)
         if self._stop_debounce_task and not self._stop_debounce_task.done():
             self._stop_debounce_task.cancel()
@@ -289,6 +385,12 @@ class HueEntertainmentBridge:
 
     def _on_stream_end(self) -> None:
         """Handle stream end — debounce to survive track transitions."""
+        if self._follow_session is not None:
+            return
+        self._schedule_stop()
+
+    def _schedule_stop(self) -> None:
+        """Stop the lights' stream after a short wait, unless audio comes back."""
         # Also act while a start is still in flight: the stream can end before
         # the target's start() completes, and that late start would otherwise leave
         # a stream that runs forever.
@@ -300,7 +402,7 @@ class HueEntertainmentBridge:
 
     def _on_stream_clear(self) -> None:
         """Handle seek — queued analyzer state belongs to pre-seek audio, drop it."""
-        if self._analyzer is not None:
+        if self._analyzer is not None and self._follow_session is None:
             self._analyzer.clear_beats()
 
     async def _debounced_stop(self) -> None:
@@ -317,6 +419,11 @@ class HueEntertainmentBridge:
             await self._stop_entertainment()
 
     def _on_visualizer_frame(self, frame: ExtractedFrame) -> None:
+        """Queue spectrum and onset-peak features of the group's audio for the renderer."""
+        if self._follow_session is None:
+            self._queue_frame(frame)
+
+    def _queue_frame(self, frame: ExtractedFrame) -> None:
         """Queue spectrum and onset-peak features for the renderer."""
         # Frames arrive ahead of the playhead (in-process delivery follows the audio push);
         # the analyzer queues them by timestamp and drains at render time. Gated so the
@@ -334,17 +441,17 @@ class HueEntertainmentBridge:
         # Not gated on streaming: the schedule lands once per track and may arrive while
         # DTLS is still connecting; the renderer prunes past beats and track changes
         # replace the schedule.
-        if self._analyzer is not None:
+        if self._analyzer is not None and self._follow_session is None:
             self._analyzer.push_beats(beats)
 
     def _on_beats_clear(self) -> None:
         """Drop the beat schedule (a track change re-pushes a fresh one)."""
-        if self._analyzer is not None:
+        if self._analyzer is not None and self._follow_session is None:
             self._analyzer.clear_beat_schedule()
 
     def _on_color(self, payload: ServerStatePayload) -> None:
         """Forward color palette updates from the Sendspin server to the analyzer."""
-        if self._analyzer is None or payload.color is None:
+        if self._analyzer is None or payload.color is None or self._follow_session is not None:
             return
         update: dict[str, tuple[int, int, int] | None] = {}
         for name in (
