@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""Keep this fork's feature branches on top of upstream, and rebuild release branches.
+"""Keep this fork's `edge` branch current with upstream.
 
-Each run:
-1. Rebases every feature branch onto the upstream base branch (dev/main), runs the
-   tests, and force-pushes with a lease on the commit it fetched, so a push you made
-   in the meantime is never overwritten.
-2. Builds release/<tag> for the newest Music Assistant server stable release and the
-   newest beta: the release tag plus the feature commits cherry-picked on top. The
-   frontend fork uses the frontend version that server release pins.
-3. Deletes old release/* branches, keeping the newest few.
-4. Writes the release branches that are current to the `releases` step output, as JSON
-   ([{"branch", "tag", "sha"}]), for the jobs that build installable releases from them.
+`edge` is upstream's base branch (dev/main) plus every feature branch you merged into it by
+hand. It is never rebased or force-pushed. Each run:
 
-Nothing is pushed for a step that conflicts or fails its tests. The run then exits
-non-zero (GitHub mails you about failed scheduled runs) and, when the fork has issues
-enabled, opens or updates an issue.
+1. Fetches upstream. If `edge` already contains the upstream tip, there is nothing to do.
+2. Otherwise merges upstream into `edge`, runs `test_command`, and pushes (fast-forward only),
+   so a push you made in the meantime is never overwritten; the run just retries next time.
+3. Optionally rebases the branches in `rebase_features` onto upstream (empty by default:
+   a branch that is merged into `edge` should not also be rebased, or its commits come in twice).
+
+Nothing is pushed for a merge that conflicts or fails its tests. The run then exits non-zero
+(GitHub mails you about failed scheduled runs) and, when the fork has issues enabled, opens or
+updates an issue. Fix it by merging upstream into `edge` locally, resolving, and pushing.
 """
 
 from __future__ import annotations
@@ -22,20 +20,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import urllib.error
 import urllib.request
 
 API = "https://api.github.com"
-SERVER_REPO = "music-assistant/server"
 ISSUE_TITLE = "Fork sync needs attention"
 
 
 class Sync:
     def __init__(self, cfg: dict, args: argparse.Namespace) -> None:
         self.cfg = cfg
+        self.base = cfg["base_branch"]
         self.dry_run = args.dry_run
         self.skip_tests = args.skip_tests
         self.fork = args.fork_remote
@@ -43,8 +40,6 @@ class Sync:
         self.token = os.environ.get("SYNC_TOKEN", "")
         self.problems: list[str] = []
         self.notes: list[str] = []
-        # release branches that are current on the fork after this run
-        self.releases: list[dict[str, str]] = []
 
     # -- helpers -----------------------------------------------------------------
 
@@ -61,18 +56,18 @@ class Sync:
         out = self.git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
         return out or None
 
-    def api(self, path: str, method: str = "GET", body: dict | None = None, raw: bool = False):
+    def api(self, path: str, method: str = "GET", body: dict | None = None):
         req = urllib.request.Request(
             API + path,
             method=method,
             data=json.dumps(body).encode() if body is not None else None,
         )
-        req.add_header("Accept", "application/vnd.github.raw" if raw else "application/vnd.github+json")
+        req.add_header("Accept", "application/vnd.github+json")
         if self.token:
             req.add_header("Authorization", f"Bearer {self.token}")
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = resp.read().decode()
-        return data if raw else (json.loads(data) if data else None)
+        return json.loads(data) if data else None
 
     def push(self, *args: str) -> None:
         if self.dry_run:
@@ -91,133 +86,61 @@ class Sync:
             return False
         return True
 
-    # -- release targets ---------------------------------------------------------
-
-    def server_has_path(self, tag: str, path: str) -> bool:
-        try:
-            self.api(f"/repos/{SERVER_REPO}/contents/{path}?ref={tag}")
-            return True
-        except urllib.error.HTTPError as err:
-            if err.code == 404:
-                return False
-            raise
-
-    def release_targets(self) -> list[tuple[str, str]]:
-        """Return (tag in this repo, description) for the newest stable and beta."""
-        rels = [
-            r
-            for r in self.api(f"/repos/{SERVER_REPO}/releases?per_page=60")
-            if not r["draft"] and ".dev" not in r["tag_name"]
-        ]
-        rels.sort(key=lambda r: r["published_at"], reverse=True)
-        stable = next((r for r in rels if not r["prerelease"]), None)
-        beta = next((r for r in rels if r["prerelease"]), None)
-        if stable and beta and beta["published_at"] < stable["published_at"]:
-            beta = None  # the beta line already shipped as stable
-        rcfg = self.cfg["releases"]
-        targets: list[tuple[str, str]] = []
-        for rel in (stable, beta):
-            if not rel:
-                continue
-            tag = rel["tag_name"]
-            needs = rcfg.get("requires_server_path")
-            if needs and not self.server_has_path(tag, needs):
-                self.notes.append(f"Skipped server {tag}: it predates the code this feature builds on.")
-                continue
-            if rcfg["mode"] == "server-tag":
-                targets.append((tag, f"server {tag}"))
-            else:  # frontend-pin
-                pyproject = self.api(f"/repos/{SERVER_REPO}/contents/pyproject.toml?ref={tag}", raw=True)
-                match = re.search(r"music-assistant/frontend/releases/download/([^/\s]+)/", pyproject)
-                if not match:
-                    self.problems.append(f"Could not find the frontend pin in server {tag}.")
-                    continue
-                targets.append((match.group(1), f"frontend {match.group(1)}, pinned by server {tag}"))
-        seen: set[str] = set()
-        return [t for t in targets if not (t[0] in seen or seen.add(t[0]))]
+    def conflict_files(self) -> str:
+        files = self.git("diff", "--name-only", "--diff-filter=U", check=False)
+        return "\n".join(f"    {f}" for f in files.splitlines())
 
     # -- steps -------------------------------------------------------------------
 
-    def rebase_features(self, upstream_tip: str) -> dict[str, str]:
-        """Rebase each feature branch; return the commit to build releases from."""
-        use: dict[str, str] = {}
-        for feature in self.cfg["features"]:
+    def merge_edge(self, upstream_tip: str) -> None:
+        edge = self.cfg["edge_branch"]
+        old = self.rev(f"{self.fork}/{edge}")
+        if not old:
+            self.problems.append(f"`{edge}` does not exist on the fork.")
+            return
+        if self.ok("merge-base", "--is-ancestor", upstream_tip, old):
+            self.notes.append(f"`{edge}` already contains upstream `{self.base}` ({upstream_tip[:9]}).")
+            return
+        self.git("checkout", "-q", "-f", "--detach", old)
+        message = f"Merge upstream {self.base} ({upstream_tip[:9]}) into {edge}"
+        if not self.ok("merge", "--no-ff", "-m", message, upstream_tip):
+            files = self.conflict_files()
+            self.git("merge", "--abort", check=False)
+            self.problems.append(
+                f"Upstream `{self.base}` conflicts with `{edge}`; not merged. Merge it locally, "
+                f"resolve, and push. Conflicting files:\n{files}"
+            )
+            return
+        new = self.git("rev-parse", "HEAD")
+        if not self.run_tests(f"`{edge}` with upstream `{self.base}` merged in"):
+            return
+        # a plain push only fast-forwards, so it can never drop commits pushed meanwhile
+        self.push(self.fork, f"{new}:refs/heads/{edge}")
+        self.notes.append(f"Merged upstream `{self.base}` into `{edge}` ({new[:9]}).")
+
+    def rebase_features(self, upstream_tip: str) -> None:
+        for feature in self.cfg.get("rebase_features", []):
             old = self.rev(f"{self.fork}/{feature}")
             if not old:
                 self.problems.append(f"`{feature}` does not exist on the fork.")
                 continue
-            use[feature] = old
             if self.ok("merge-base", "--is-ancestor", upstream_tip, old):
                 self.notes.append(f"`{feature}` is already on top of upstream.")
                 continue
             self.git("checkout", "-q", "-f", "--detach", old)
             if not self.ok("rebase", upstream_tip):
-                files = self.git("diff", "--name-only", "--diff-filter=U", check=False)
+                files = self.conflict_files()
                 self.git("rebase", "--abort", check=False)
                 self.problems.append(
-                    f"`{feature}` conflicts with upstream `{self.cfg['base_branch']}`; not rebased. "
-                    f"Conflicting files:\n" + "\n".join(f"    {f}" for f in files.splitlines())
+                    f"`{feature}` conflicts with upstream `{self.base}`; not rebased. "
+                    f"Conflicting files:\n{files}"
                 )
                 continue
             new = self.git("rev-parse", "HEAD")
-            if not self.run_tests(f"`{feature}` rebased on `{self.cfg['base_branch']}`"):
+            if not self.run_tests(f"`{feature}` rebased on `{self.base}`"):
                 continue
             self.push(f"--force-with-lease=refs/heads/{feature}:{old}", self.fork, f"{new}:refs/heads/{feature}")
-            self.notes.append(f"Rebased `{feature}` onto upstream `{self.cfg['base_branch']}` ({new[:9]}).")
-            use[feature] = new
-        return use
-
-    def build_releases(self, upstream_tip: str, use: dict[str, str]) -> list[str]:
-        built: list[str] = []
-        for tag, desc in self.release_targets():
-            branch = f"release/{tag}"
-            built.append(branch)
-            self.git("fetch", "-q", "--no-tags", self.up, f"refs/tags/{tag}:refs/tags/{tag}")
-            self.git("checkout", "-q", "-f", "--detach", f"refs/tags/{tag}")
-            conflict = False
-            for feature, tip in use.items():
-                base = self.git("merge-base", tip, upstream_tip)
-                if not self.ok("cherry-pick", "--empty=drop", f"{base}..{tip}"):
-                    files = self.git("diff", "--name-only", "--diff-filter=U", check=False)
-                    self.git("cherry-pick", "--abort", check=False)
-                    self.problems.append(
-                        f"`{feature}` does not apply to {desc}; `{branch}` not updated. "
-                        f"Conflicting files:\n" + "\n".join(f"    {f}" for f in files.splitlines())
-                    )
-                    conflict = True
-                    break
-            if conflict:
-                continue
-            new = self.git("rev-parse", "HEAD")
-            remote = self.rev(f"{self.fork}/{branch}")
-            if (
-                remote
-                and self.git("rev-parse", f"{remote}^{{tree}}") == self.git("rev-parse", f"{new}^{{tree}}")
-                and self.ok("merge-base", "--is-ancestor", f"refs/tags/{tag}", remote)
-            ):
-                self.notes.append(f"`{branch}` is unchanged.")
-                self.releases.append({"branch": branch, "tag": tag, "sha": remote})
-                continue
-            if not self.run_tests(f"`{branch}` ({desc})"):
-                continue
-            self.push("--force", self.fork, f"{new}:refs/heads/{branch}")
-            self.notes.append(f"Built `{branch}` from {desc}.")
-            if not self.dry_run:
-                self.releases.append({"branch": branch, "tag": tag, "sha": new})
-        return built
-
-    def prune_releases(self, keep_now: list[str]) -> None:
-        if self.problems:
-            return  # keep the older branches around while something is broken
-        refs = self.git(
-            "for-each-ref", "--sort=-committerdate", "--format=%(refname:lstrip=3)",
-            f"refs/remotes/{self.fork}/release/",
-        ).splitlines()
-        keep = set(keep_now) | set(refs[: self.cfg.get("keep_releases", 3)])
-        for branch in refs:
-            if branch not in keep:
-                self.push(self.fork, "--delete", branch)
-                self.notes.append(f"Deleted old `{branch}`.")
+            self.notes.append(f"Rebased `{feature}` onto upstream `{self.base}` ({new[:9]}).")
 
     # -- reporting ---------------------------------------------------------------
 
@@ -254,26 +177,18 @@ class Sync:
         except urllib.error.HTTPError as err:
             print(f"Could not update the issue: {err}", file=sys.stderr)
 
-    def write_outputs(self) -> None:
-        if output := os.environ.get("GITHUB_OUTPUT"):
-            with open(output, "a", encoding="utf-8") as fh:
-                fh.write(f"releases={json.dumps(self.releases)}\n")
-
     # -- main --------------------------------------------------------------------
 
     def run(self) -> int:
         if not self.git("config", "user.email", check=False):
             self.git("config", "user.name", "fork-sync")
             self.git("config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
-        base = self.cfg["base_branch"]
         self.git("fetch", "-q", "--prune", "--no-tags", self.fork)
-        self.git("fetch", "-q", "--no-tags", self.up, base)
-        upstream_tip = self.git("rev-parse", f"{self.up}/{base}")
-        use = self.rebase_features(upstream_tip)
-        built = self.build_releases(upstream_tip, use) if use else []
-        self.prune_releases(built)
+        self.git("fetch", "-q", "--no-tags", self.up, self.base)
+        upstream_tip = self.git("rev-parse", f"{self.up}/{self.base}")
+        self.merge_edge(upstream_tip)
+        self.rebase_features(upstream_tip)
         self.report()
-        self.write_outputs()
         return 1 if self.problems else 0
 
 

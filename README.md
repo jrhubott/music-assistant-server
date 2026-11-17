@@ -3,22 +3,27 @@
 This branch only holds the automation that keeps this fork current. It is the fork's
 default branch so that GitHub runs its schedule; it never goes into a PR.
 
-Every day at 05:30 UTC (or from **Actions > Fork sync > Run workflow**) `fork_sync.py`:
+Full documentation (the record of truth for this setup) is the BookStack page
+"Music Assistant forks: edge branch and ha-apps".
 
-1. Rebases each branch in `fork-sync.json` `features` onto upstream `dev`, runs
-   `test_command`, and force-pushes with a lease, so a push you made meanwhile is never lost.
-2. Builds `release/<tag>` for the newest server stable release and newest beta:
-   the server tag plus the feature commits. Releases older than
-   `requires_server_path` are skipped.
-3. Keeps the newest 3 `release/*` branches.
+## edge
 
-The `release/*` and feature branches are built into installable Home Assistant apps by
-[jrhubott/ha-apps](https://github.com/jrhubott/ha-apps), which reads them every day at 06:30 UTC.
+`edge` is upstream `dev` plus every feature branch merged into it by hand. It is never
+rebased or force-pushed. Every day at 05:30 UTC (or from **Actions > Fork sync > Run workflow**)
+`fork_sync.py` merges upstream `dev` into `edge`, runs `test_command`, and pushes
+(fast-forward only). A conflict or failing test pushes nothing and fails the run; merge
+upstream into `edge` locally, resolve, and push.
 
-A conflict or failing test pushes nothing and fails the run.
+To add a feature: `git checkout edge && git pull && git merge feature/x && git push fork edge`.
+
+Branches listed in `rebase_features` are rebased onto upstream instead; keep a branch out of
+that list once it is merged into `edge`.
+
+[jrhubott/ha-apps](https://github.com/jrhubott/ha-apps) builds `edge` of both forks into the
+"Music Assistant (light follow) Edge" Home Assistant app every day at 06:30 UTC.
 
 Needs a `SYNC_TOKEN` repository secret: a fine-grained token for this fork with
 Contents and Workflows read/write.
 
-Working on a feature branch locally: `git config pull.rebase true` and
-`git config rebase.autoStash true`, then `git pull` before you start.
+Local clones: `git config branch.edge.rebase false`, so `git pull` on `edge` merges
+instead of flattening its merge commits.
