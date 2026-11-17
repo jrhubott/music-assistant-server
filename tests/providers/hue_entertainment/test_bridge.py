@@ -211,3 +211,21 @@ async def test_frames_are_only_queued_while_the_target_streams(
     assert bridge._is_streaming
     analyzer.apply_spectrum.assert_called_once_with([1, 2], 10)
     analyzer.apply_peak.assert_called_once_with(0.5, 10)
+
+
+async def test_the_follow_trim_shifts_the_render_time(
+    bridge: HueEntertainmentBridge, target: FakeTarget
+) -> None:
+    """A followed player that plays later than the feed renders the lights that much later."""
+    analyzer = Mock(render=Mock(return_value=[]))
+    bridge._analyzer = analyzer
+    bridge._hue_latency_us = 100_000
+    bridge._follow_session = Mock(render_trim_us=30_000)
+    bridge._is_streaming = True
+    target.streaming = True
+
+    bridge._render_tick()
+    bridge._is_streaming = False
+    bridge._follow_session = None
+
+    analyzer.render.assert_called_once_with(70_000)

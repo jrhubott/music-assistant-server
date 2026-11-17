@@ -505,8 +505,11 @@ class HueEntertainmentBridge:
             # Skip this tick when not ready (stream down) but keep the loop
             # alive so it recovers once the connection is back.
             if self._analyzer is not None and self.target.is_streaming:
-                # Render slightly ahead of the playhead to compensate for the light lag.
+                # Render slightly ahead of the playhead to compensate for the light lag,
+                # and later by as much as a followed player plays later than its feed.
                 server_now = self.sendspin_server.clock.now_us() + self._hue_latency_us
+                if self._follow_session is not None:
+                    server_now -= self._follow_session.render_trim_us
                 commands = self._analyzer.render(server_now)
                 if commands:
                     self.target.send(commands)

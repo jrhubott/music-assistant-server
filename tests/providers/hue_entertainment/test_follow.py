@@ -30,6 +30,7 @@ class _World:
             playback_state=PlaybackState.IDLE,
             current_media=None,
             corrected_elapsed_time=None,
+            elapsed_time_last_updated=None,
         )
         mass = MagicMock()
         mass.players.get_player = MagicMock(
@@ -70,6 +71,7 @@ class _World:
             source_id=QUEUE_ID,
             queue_item_id=item_id,
             corrected_elapsed_time=position_s,
+            elapsed_time_last_updated=self.now_us / 1_000_000,
             palette=None,
         )
 
@@ -84,6 +86,26 @@ class _World:
     def jump(self, position_s: float) -> None:
         """Let the reported position of the playing item jump."""
         self.player.current_media.corrected_elapsed_time = position_s
+
+    def report(self, offset_s: float, seconds: float = 0.25) -> None:
+        """
+        Advance a tick on which the player sends a fresh report, offset from the feed.
+
+        :param offset_s: How much later the player reports it plays than the feed's anchor.
+        :param seconds: The length of the tick.
+        """
+        self.now_us += int(seconds * 1_000_000)
+        anchor_us = self.session._anchor_us
+        assert anchor_us is not None
+        media = self.player.current_media
+        media.corrected_elapsed_time = (self.now_us - anchor_us) / 1_000_000 - offset_s
+        media.elapsed_time_last_updated = self.now_us / 1_000_000
+        self.session._tick()
+
+    def settle(self) -> None:
+        """Let the feed run past the start, where the position reports are not trusted."""
+        for _ in range(8):
+            self.tick()
 
 
 def test_the_feed_starts_at_the_reported_position() -> None:
@@ -216,6 +238,119 @@ def test_a_changed_delay_restarts_the_feed_on_the_next_tick() -> None:
     assert len(world.starts) == 2
     _, position_s, anchor_us = world.starts[1]
     assert anchor_us == world.now_us - int(position_s * 1_000_000) - 100_000
+
+
+def test_a_small_offset_is_trimmed_without_restarting_the_feed() -> None:
+    """Reports a steady 200 ms later than the feed shift the render, not the feed."""
+    world = _World()
+    world.play("a", 30.0)
+    world.session._tick()
+    world.settle()
+    for _ in range(60):
+        world.report(0.2)
+
+    assert len(world.starts) == 1
+    assert world.session.render_trim_us == pytest.approx(200_000, abs=5_000)
+
+
+def test_the_trim_moves_no_faster_than_the_slew_rate() -> None:
+    """A correction is spread over time so the lights do not visibly skip."""
+    world = _World()
+    world.play("a", 30.0)
+    world.session._tick()
+    world.settle()
+    for _ in range(4):
+        world.report(0.2)
+
+    # four quarter-second ticks at 2 % of the clock: 20 ms at most
+    assert 0 < world.session.render_trim_us <= 20_000
+
+
+def test_reports_right_after_the_start_are_ignored() -> None:
+    """The first seconds of a feed, when a player still settles, leave the trim alone."""
+    world = _World()
+    world.play("a", 30.0)
+    world.session._tick()
+    for _ in range(4):
+        world.report(0.2)
+
+    assert world.session.render_trim_us == 0
+
+
+def test_jitter_within_the_deadband_leaves_the_trim_alone() -> None:
+    """Reports that wander by a few milliseconds do not move the lights."""
+    world = _World()
+    world.play("a", 30.0)
+    world.session._tick()
+    world.settle()
+    for offset_s in (0.01, -0.01, 0.015, -0.005, 0.01, 0.0) * 5:
+        world.report(offset_s)
+
+    assert world.session.render_trim_us == 0
+
+
+def test_a_single_late_report_does_not_move_the_trim() -> None:
+    """The median of recent reports outvotes one report that arrived late."""
+    world = _World()
+    world.play("a", 30.0)
+    world.session._tick()
+    world.settle()
+    for _ in range(5):
+        world.report(0.0)
+    world.report(0.4)
+    for _ in range(5):
+        world.report(0.0)
+
+    assert world.session.render_trim_us == 0
+    assert len(world.starts) == 1
+
+
+def test_extrapolated_positions_are_not_taken_as_reports() -> None:
+    """Only a report the player sent counts; a position carried forward on the clock does not."""
+    world = _World()
+    world.play("a", 30.0)
+    world.session._tick()
+    world.settle()
+    world.report(0.2)
+    for _ in range(40):
+        world.tick()
+
+    assert world.session.render_trim_us == 0
+
+
+def test_a_reanchor_resets_the_trim() -> None:
+    """A seek starts a fresh feed, which renders without the old trim."""
+    world = _World()
+    world.play("a", 30.0)
+    world.session._tick()
+    world.settle()
+    for _ in range(40):
+        world.report(0.2)
+    assert world.session.render_trim_us > 0
+
+    world.jump(90.0)
+    world.tick()
+    world.tick()
+
+    assert len(world.starts) == 2
+    assert world.session.render_trim_us == 0
+
+
+def test_each_report_is_logged_with_its_offset(caplog: pytest.LogCaptureFixture) -> None:
+    """A fresh report logs how far it lies from the feed, to measure report jitter."""
+    world = _World()
+    world.play("a", 30.0)
+    world.session._tick()
+    world.settle()
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        world.report(0.12)
+        world.tick()
+        world.tick()
+
+    reports = [r.getMessage() for r in caplog.records if "position report" in r.getMessage()]
+    assert len(reports) == 1
+    assert "+120 ms" in reports[0]
 
 
 def test_a_live_source_is_logged_once(caplog: pytest.LogCaptureFixture) -> None:

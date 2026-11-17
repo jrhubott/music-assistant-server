@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import statistics
+from collections import deque
 from contextlib import suppress
 from typing import TYPE_CHECKING, cast
 
@@ -51,6 +53,19 @@ _REANCHOR_CONFIRM_TICKS = 2
 # named yet (Sonos lags up to a second there), so it has to hold longer.
 _RESTART_POSITION_S = 3.0
 _RESTART_CONFIRM_TICKS = 8
+# Position reports from the first seconds of a feed are not trusted: at a track change or a
+# seek a player still settles, and the anchor is taken from its first report regardless.
+_SETTLE_US = 2_000_000
+# The recent position reports whose median sets how much later the lights render than the
+# feed; a single late report cannot move it.
+_REPORT_WINDOW = 7
+_MIN_REPORTS = 3
+# An offset of the median within this much is left alone, so report jitter does not move
+# the lights; a larger one is corrected in full.
+_TRIM_DEADBAND_US = 20_000
+# How fast the correction moves, as a share of the time passing: slow enough that the
+# lights never visibly skip.
+_TRIM_SLEW = 0.02
 # How long to wait for the followed item's audio before trying again.
 _BUFFER_RETRY_S = 2.0
 # Beat analysis can still be running when a track starts.
@@ -120,6 +135,19 @@ class FollowSession:
         self._unfollowable_source: str | None = None
         # set when the delay changed: the next tick restarts the feed on the new anchor
         self._restart = False
+        # the offsets of recent position reports from the anchor, and the correction of
+        # the render that follows their median
+        self._report_stamp: float | None = None
+        self._report_offsets: deque[int] = deque(maxlen=_REPORT_WINDOW)
+        self._settled_at_us = 0
+        self._trim_us = 0
+        self._trimming = False
+        self._trimmed_at_us = 0
+
+    @property
+    def render_trim_us(self) -> int:
+        """Return how much later the lights should render than the feed's timestamps."""
+        return self._trim_us
 
     def start(self) -> None:
         """Start following."""
@@ -166,7 +194,7 @@ class FollowSession:
             self._end_feed()
             return
         self._unfollowable_source = None
-        queue_item, position_s = target
+        queue_item, position_s, report_stamp = target
         now_us = self.bridge.sendspin_server.clock.now_us()
         anchor_us = now_us - int(position_s * 1_000_000) + self._delay_us
         self._apply_palette(player)
@@ -177,6 +205,7 @@ class FollowSession:
         moved = self._anchor_us is not None and abs(anchor_us - self._anchor_us) > _REANCHOR_US
         if not moved:
             self._jump_ticks = 0
+            self._follow_report(report_stamp, anchor_us, now_us)
             if self._feed_task is None and self.mass.loop.time() >= self._retry_at:
                 # the audio was not there yet: try again from where the player is now
                 self._start_feed(queue_item, position_s, anchor_us)
@@ -197,9 +226,11 @@ class FollowSession:
         )
         self._start_feed(queue_item, position_s, anchor_us)
 
-    def _playing_item(self, player: Player | None) -> tuple[QueueItem, float] | None:
+    def _playing_item(self, player: Player | None) -> tuple[QueueItem, float, float | None] | None:
         """
-        Return the queue item the player plays and its position, None when it plays none.
+        Return the queue item the player plays, its position and when the player reported it.
+
+        None when it plays no queue item.
 
         :param player: The followed player.
         """
@@ -212,11 +243,13 @@ class FollowSession:
         if queue_item is None or queue_item.streamdetails is None:
             return None
         position_s = media.corrected_elapsed_time
+        report_stamp = media.elapsed_time_last_updated
         if position_s is None:
             position_s = player.corrected_elapsed_time
+            report_stamp = player.elapsed_time_last_updated
         if position_s is None:
             return None
-        return queue_item, max(0.0, position_s)
+        return queue_item, max(0.0, position_s), report_stamp
 
     def _start_feed(self, queue_item: QueueItem, position_s: float, anchor_us: int) -> None:
         """
@@ -230,12 +263,75 @@ class FollowSession:
         self._jump_ticks = 0
         self._item_id = queue_item.queue_item_id
         self._anchor_us = anchor_us
+        now_us = self.bridge.sendspin_server.clock.now_us()
+        self._report_offsets.clear()
+        self._settled_at_us = now_us + _SETTLE_US
+        self._trim_us = 0
+        self._trimming = False
+        self._trimmed_at_us = now_us
         self.bridge.follow_stream_start()
         self._feed_task = self.mass.create_task(self._feed(queue_item, position_s, anchor_us))
         # the beats are timed to the anchor, so they follow it when it moves
         if self._beat_task is not None:
             self._beat_task.cancel()
         self._beat_task = self.mass.create_task(self._push_beats(queue_item, anchor_us))
+
+    def _follow_report(self, report_stamp: float | None, anchor_us: int, now_us: int) -> None:
+        """
+        Take in a fresh position report and move the render correction toward it.
+
+        :param report_stamp: When the player last reported its position.
+        :param anchor_us: Where that report puts position zero on the Sendspin clock.
+        :param now_us: The Sendspin clock now.
+        """
+        if self._anchor_us is None:
+            return
+        # between reports the position is carried forward on the clock: no new information
+        if report_stamp != self._report_stamp:
+            self._report_stamp = report_stamp
+            offset_us = anchor_us - self._anchor_us
+            settling = now_us < self._settled_at_us
+            if not settling:
+                self._report_offsets.append(offset_us)
+            self.logger.debug(
+                "%s position report: %+.0f ms from the feed (median %+.0f ms of %d, trim "
+                "%+.0f ms)%s",
+                self.player_id,
+                offset_us / 1000,
+                self._median_offset_us() / 1000,
+                len(self._report_offsets),
+                self._trim_us / 1000,
+                " while settling" if settling else "",
+            )
+        self._slew_trim(now_us)
+
+    def _median_offset_us(self) -> int:
+        """Return the median offset of the recent position reports, 0 without any."""
+        if not self._report_offsets:
+            return 0
+        return int(statistics.median(self._report_offsets))
+
+    def _slew_trim(self, now_us: int) -> None:
+        """
+        Move the render correction toward the median report, no faster than the slew rate.
+
+        :param now_us: The Sendspin clock now.
+        """
+        # ticks spent confirming a jump do not slew, so they must not add up to one big step
+        elapsed_us = min(now_us - self._trimmed_at_us, int(2 * _TICK_S * 1_000_000))
+        self._trimmed_at_us = now_us
+        if len(self._report_offsets) < _MIN_REPORTS:
+            return
+        error_us = self._median_offset_us() - self._trim_us
+        if not self._trimming and abs(error_us) <= _TRIM_DEADBAND_US:
+            return
+        step_us = max(1, int(elapsed_us * _TRIM_SLEW))
+        if abs(error_us) <= step_us:
+            self._trim_us += error_us
+            self._trimming = False
+        else:
+            self._trim_us += step_us if error_us > 0 else -step_us
+            self._trimming = True
 
     def _end_feed(self) -> None:
         """Stop the feed while the followed player plays nothing."""
