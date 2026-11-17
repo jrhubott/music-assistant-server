@@ -2,7 +2,9 @@ name: Fork sync
 
 on:
   schedule:
-    - cron: "30 4 * * *" # after the 03:45 UTC nightly tag
+    # after the 03:45 UTC nightly tag, and an hour after the frontend fork's sync, so the
+    # frontend wheel a release image needs is published by then
+    - cron: "30 5 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -39,12 +41,14 @@ jobs:
     runs-on: ubuntu-latest
     container: ghcr.io/music-assistant/base:${{ needs.base-image.outputs.version }}
     timeout-minutes: 60
+    outputs:
+      releases: ${{ steps.sync.outputs.releases }}
     steps:
       - name: Install build tools
         run: apt-get update && apt-get install -y --no-install-recommends git build-essential ca-certificates
 
       - name: Check out the sync script
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: tools
 
@@ -60,9 +64,119 @@ jobs:
           git -C repo remote add upstream https://github.com/music-assistant/server.git
 
       - name: Sync
+        id: sync
         env:
           SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 tools/fork_sync.py --config tools/fork-sync.json --repo-dir repo \
             ${{ inputs.dry_run && '--dry-run' || '' }}
+
+  # Build an installable image of each current release branch: the official image of that
+  # server release with the feature files and the light-follow frontend wheel laid over it.
+  image:
+    needs: sync
+    if: ${{ !cancelled() && needs.sync.outputs.releases != '' && needs.sync.outputs.releases != '[]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ${{ fromJSON(needs.sync.outputs.releases) }}
+    env:
+      TAG: ${{ matrix.release.tag }}
+      SHA: ${{ matrix.release.sha }}
+      FRONTEND_FORK: ${{ github.repository_owner }}/music-assistant-frontend
+    steps:
+      - name: Check out the build files
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tools
+
+      - name: Check out the release branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.release.sha }}
+          path: src
+          fetch-depth: 0
+
+      - name: Collect the overlay
+        id: overlay
+        run: |
+          image="ghcr.io/$(tr '[:upper:]' '[:lower:]' <<< "$GITHUB_REPOSITORY_OWNER")/music-assistant-server"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          git -C src fetch -q --no-tags https://github.com/music-assistant/server.git "refs/tags/$TAG:refs/tags/$TAG"
+          changed=$(git -C src diff --name-only --no-renames "refs/tags/$TAG" HEAD)
+          # only package files can be laid over the installed server; a new dependency or a
+          # packaging change needs a real build
+          outside=$(grep -vE '^(music_assistant|tests)/|^$' <<< "$changed" || true)
+          if [ -n "$outside" ]; then
+            echo "::error::The feature changes files an image overlay cannot apply:%0A$outside"
+            exit 1
+          fi
+          ctx=tools/image/context
+          mkdir -p "$ctx/overlay"
+          git -C src diff --name-only --no-renames --diff-filter=d "refs/tags/$TAG" HEAD -- music_assistant \
+            | while read -r f; do mkdir -p "$ctx/overlay/$(dirname "$f")"; cp "src/$f" "$ctx/overlay/$f"; done
+          git -C src diff --name-only --no-renames --diff-filter=D "refs/tags/$TAG" HEAD -- music_assistant \
+            > "$ctx/deleted.txt"
+          cp tools/image/apply_overlay.py "$ctx/"
+
+          frontend=$(sed -n 's|.*music-assistant/frontend/releases/download/\([^/]*\)/.*|\1|p' src/pyproject.toml | head -1)
+          test -n "$frontend"
+          wheel="music_assistant_frontend-$frontend-py3-none-any.whl"
+          url="https://github.com/$FRONTEND_FORK/releases/download/lights-$frontend/$wheel"
+          if ! curl -fsSL -o "$ctx/$wheel" "$url"; then
+            echo "::warning::No light-follow frontend $frontend is published yet ($url); the image of $TAG is built on the next run."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          key="$SHA-$(sha256sum "$ctx/$wheel" | cut -c1-16)"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          channel=$([[ "$TAG" =~ (a|b|rc)[0-9]+$ ]] && echo beta || echo stable)
+          echo "tags=$image:$TAG,$image:$channel" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        if: steps.overlay.outputs.skip != 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+
+      - name: Check for an image of this build
+        if: steps.overlay.outputs.skip != 'true'
+        id: existing
+        env:
+          IMAGE: ${{ steps.overlay.outputs.image }}
+          KEY: ${{ steps.overlay.outputs.key }}
+        run: |
+          labels=$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{json .Image}}' 2>/dev/null || true)
+          if [ -n "$labels" ] && grep -q "$KEY" <<< "$labels"; then
+            echo "$IMAGE:$TAG is already built from $KEY"
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        if: steps.overlay.outputs.skip != 'true' && steps.existing.outputs.current != 'true'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Docker Buildx
+        if: steps.overlay.outputs.skip != 'true' && steps.existing.outputs.current != 'true'
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+
+      - name: Build and push the image
+        if: steps.overlay.outputs.skip != 'true' && steps.existing.outputs.current != 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: tools/image
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.overlay.outputs.tags }}
+          push: true
+          build-args: |
+            SERVER_TAG=${{ matrix.release.tag }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
+            BUILD_KEY=${{ steps.overlay.outputs.key }}

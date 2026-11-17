@@ -9,6 +9,8 @@ Each run:
    newest beta: the release tag plus the feature commits cherry-picked on top. The
    frontend fork uses the frontend version that server release pins.
 3. Deletes old release/* branches, keeping the newest few.
+4. Writes the release branches that are current to the `releases` step output, as JSON
+   ([{"branch", "tag", "sha"}]), for the jobs that build installable releases from them.
 
 Nothing is pushed for a step that conflicts or fails its tests. The run then exits
 non-zero (GitHub mails you about failed scheduled runs) and, when the fork has issues
@@ -41,6 +43,8 @@ class Sync:
         self.token = os.environ.get("SYNC_TOKEN", "")
         self.problems: list[str] = []
         self.notes: list[str] = []
+        # release branches that are current on the fork after this run
+        self.releases: list[dict[str, str]] = []
 
     # -- helpers -----------------------------------------------------------------
 
@@ -192,11 +196,14 @@ class Sync:
                 and self.ok("merge-base", "--is-ancestor", f"refs/tags/{tag}", remote)
             ):
                 self.notes.append(f"`{branch}` is unchanged.")
+                self.releases.append({"branch": branch, "tag": tag, "sha": remote})
                 continue
             if not self.run_tests(f"`{branch}` ({desc})"):
                 continue
             self.push("--force", self.fork, f"{new}:refs/heads/{branch}")
             self.notes.append(f"Built `{branch}` from {desc}.")
+            if not self.dry_run:
+                self.releases.append({"branch": branch, "tag": tag, "sha": new})
         return built
 
     def prune_releases(self, keep_now: list[str]) -> None:
@@ -247,6 +254,11 @@ class Sync:
         except urllib.error.HTTPError as err:
             print(f"Could not update the issue: {err}", file=sys.stderr)
 
+    def write_outputs(self) -> None:
+        if output := os.environ.get("GITHUB_OUTPUT"):
+            with open(output, "a", encoding="utf-8") as fh:
+                fh.write(f"releases={json.dumps(self.releases)}\n")
+
     # -- main --------------------------------------------------------------------
 
     def run(self) -> int:
@@ -261,6 +273,7 @@ class Sync:
         built = self.build_releases(upstream_tip, use) if use else []
         self.prune_releases(built)
         self.report()
+        self.write_outputs()
         return 1 if self.problems else 0
 
 
