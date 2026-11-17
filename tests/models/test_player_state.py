@@ -45,6 +45,7 @@ from music_assistant_models.queue_item import QueueItem
 from music_assistant_models.streamdetails import StreamDetails, StreamMetadata
 from music_assistant_models.unique_list import UniqueList
 
+from music_assistant.constants import ATTR_FOLLOWS
 from music_assistant.controllers.players.audio_sources import AudioSourceSession
 from music_assistant.models.player_state import (
     GroupSnapshot,
@@ -2385,6 +2386,18 @@ class TestFollowers:
         assert state.synced_to == "leader"
         assert state.group_members == []
         assert state.can_group_with == set()
+
+    def test_follower_names_the_player_it_follows(self) -> None:
+        """A follower publishes its leader in its extra attributes; others publish none."""
+        follower = _derive(
+            player_type=PlayerType.LIGHT,
+            follows="leader",
+            peers={"leader": _peer("leader"), PLAYER_ID: _peer(PLAYER_ID)},
+        )
+        speaker = _derive()
+
+        assert follower.extra_attributes[ATTR_FOLLOWS] == "leader"
+        assert ATTR_FOLLOWS not in speaker.extra_attributes
 
     def test_follower_of_an_unknown_leader_is_not_synced(self) -> None:
         """A follower whose leader is gone is synced to nothing."""

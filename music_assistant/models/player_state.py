@@ -26,6 +26,7 @@ from music_assistant_models.unique_list import UniqueList
 
 from music_assistant.constants import (
     ACTIVE_PROTOCOL_FEATURES,
+    ATTR_FOLLOWS,
     EXTERNAL_SOURCES,
     FOREIGN_PROTOCOL_FEATURES,
     PROTOCOL_FEATURES,
@@ -395,7 +396,7 @@ def derive_player_state(inputs: StateInputs) -> tuple[PlayerState, StateEffects]
         private=inputs.private,
         expose_to_ha=inputs.expose_to_ha,
         icon=inputs.icon,
-        extra_attributes=inputs.extra_attributes,
+        extra_attributes=_extra_attributes(inputs),
         power_control=inputs.power_control,
         volume_control=inputs.volume_control,
         mute_control=inputs.mute_control,
@@ -486,6 +487,17 @@ def resolve_synced_to(
         if protocol.synced_to and (sync_parent := peers.get(protocol.synced_to)):
             return sync_parent.player_id
     return None
+
+
+def _extra_attributes(inputs: StateInputs) -> dict[str, EXTRA_ATTRIBUTES_TYPES]:
+    """
+    Return the extra attributes a player publishes, with the player it follows added.
+
+    Clients tell a follower from a protocol member of the same group by it.
+    """
+    if inputs.follows is None:
+        return inputs.extra_attributes
+    return {**inputs.extra_attributes, ATTR_FOLLOWS: inputs.follows}
 
 
 def _synced_to(inputs: StateInputs) -> str | None:
