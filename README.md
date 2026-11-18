@@ -20,7 +20,8 @@ Branches listed in `rebase_features` are rebased onto upstream instead; keep a b
 that list once it is merged into `edge`.
 
 [jrhubott/ha-apps](https://github.com/jrhubott/ha-apps) builds `edge` of both forks into the
-"Music Assistant (light follow) Edge" Home Assistant app every day at 06:30 UTC.
+"Music Assistant Edge (jrhubott)" Home Assistant app. It checks hourly and builds when `edge` has
+a new commit.
 
 Needs a `SYNC_TOKEN` repository secret: a fine-grained token for this fork with
 Contents and Workflows read/write.

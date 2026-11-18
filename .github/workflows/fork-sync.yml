@@ -2,8 +2,7 @@ name: Fork sync
 
 on:
   schedule:
-    # after the 03:45 UTC nightly tag and the frontend fork's sync, and before the
-    # jrhubott/ha-apps edge build at 06:30
+    # after the 03:45 UTC nightly tag; jrhubott/ha-apps checks edge hourly and builds it
     - cron: "30 5 * * *"
   workflow_dispatch:
     inputs:
