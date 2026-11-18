@@ -12620,3 +12620,82 @@ class TestExternalSourceTakeover:
         controller, sonos_player = TestCanGroupWithExternalSource._build_rig(mock_mass)
 
         assert not controller._is_ma_managed_source(sonos_player, "tv")
+
+
+class TestSonosZones:
+    """The DLNA renderer of an extra Sonos zone stays off the speaker it shares a MAC with."""
+
+    MAC = "54:78:1A:D4:FF:44"
+    SPEAKER_UUID = "RINCON_54781AD4FF4401400"
+
+    def _speaker(self, mock_mass: MagicMock) -> MockPlayer:
+        speaker = MockPlayer(
+            MockProvider("sonos", mass=mock_mass),
+            self.SPEAKER_UUID,
+            "Living Room",
+            identifiers={
+                IdentifierType.MAC_ADDRESS: self.MAC,
+                IdentifierType.UUID: self.SPEAKER_UUID,
+                IdentifierType.IP_ADDRESS: "192.168.1.60",
+            },
+        )
+        speaker.set_initialized()
+        return speaker
+
+    def _renderer(self, mock_mass: MagicMock, port: str) -> MockPlayer:
+        uuid = f"RINCON_54781AD4FF44{port}_MR"
+        renderer = MockPlayer(
+            MockProvider("dlna", mass=mock_mass),
+            f"uuid:{uuid}",
+            "Living Room (DLNA)",
+            player_type=PlayerType.PROTOCOL,
+            identifiers={
+                IdentifierType.MAC_ADDRESS: self.MAC,
+                IdentifierType.UUID: uuid,
+                IdentifierType.IP_ADDRESS: "192.168.1.60",
+            },
+        )
+        renderer.set_initialized()
+        return renderer
+
+    def test_main_zone_renderer_matches(self, mock_mass: MagicMock) -> None:
+        """The renderer of the speaker itself (port 01400) matches it."""
+        controller = PlayerController(mock_mass)
+        speaker = self._speaker(mock_mass)
+        assert controller._identifiers_match(speaker, self._renderer(mock_mass, "01400")) is True
+
+    def test_other_zone_renderer_does_not_match(self, mock_mass: MagicMock) -> None:
+        """The renderer of a headphone zone (port 01500) shares the MAC but does not match."""
+        controller = PlayerController(mock_mass)
+        speaker = self._speaker(mock_mass)
+        renderer = self._renderer(mock_mass, "01500")
+        assert controller._identifiers_match(speaker, renderer) is False
+        assert controller._identifiers_match(renderer, speaker) is False
+
+    def test_stored_link_to_other_zone_is_dropped(self, mock_mass: MagicMock) -> None:
+        """A link to a headphone zone renderer that an earlier version stored is not restored."""
+        controller = PlayerController(mock_mass)
+        speaker = self._speaker(mock_mass)
+        renderer = self._renderer(mock_mass, "01500")
+        store: dict[str, Any] = {
+            CONF_PLAYERS: {
+                renderer.player_id: {
+                    "provider": "dlna--x",
+                    "player_type": "protocol",
+                    "values": {CONF_PROTOCOL_PARENT_ID: speaker.player_id},
+                },
+                speaker.player_id: {
+                    "provider": "sonos--y",
+                    "player_type": "player",
+                    "values": {"linked_protocol_ids": [renderer.player_id]},
+                },
+            }
+        }
+        _wire_nested_config(mock_mass, store)
+        controller._players = {speaker.player_id: speaker, renderer.player_id: renderer}
+
+        with patch.object(controller, "_schedule_protocol_evaluation"):
+            controller._try_link_protocol_to_native(renderer)
+
+        assert renderer.protocol_parent_id is None
+        assert speaker.linked_output_protocols == []

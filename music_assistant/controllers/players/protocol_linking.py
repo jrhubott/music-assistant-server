@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextlib import suppress
 from copy import deepcopy
 from typing import TYPE_CHECKING, cast
@@ -62,6 +63,28 @@ if TYPE_CHECKING:
     from music_assistant_models.player import OutputProtocol
 
     from music_assistant import MusicAssistant
+
+# RINCON_<MAC address><port>, plus "_MR" for its DLNA renderer: port 01400 is the speaker
+# itself, another port an extra zone of the same chassis (such as the headphone zone of an
+# Amp or soundbar), whose renderer shares the speaker's MAC address and IP
+SONOS_UUID_PATTERN = re.compile(r"RINCON_[0-9A-F]{12}(?P<port>\d{5})(?:_MR)?", re.IGNORECASE)
+
+
+def sonos_zones_differ(player_a: Player, player_b: Player) -> bool:
+    """
+    Return whether two players belong to different zones of one Sonos chassis.
+
+    :param player_a: The first player.
+    :param player_b: The second player.
+    """
+    ports = []
+    for player in (player_a, player_b):
+        uuid_value = player.device_info.identifiers.get(IdentifierType.UUID) or ""
+        if not (match := SONOS_UUID_PATTERN.fullmatch(uuid_value)):
+            return False
+        ports.append(match["port"])
+    return ports[0] != ports[1]
+
 
 # Config value keys that are bookkeeping of the universal player wrapper itself
 # (protocol links, device-identity caches and its creation moment) and must never
@@ -210,7 +233,10 @@ class ProtocolLinkingMixin:
         :return: True if the link was restored, False if the caller must resolve the parent.
         """
         if parent_player := self.get_player(cached_parent_id):
-            if parent_player.state.type == PlayerType.GROUP:
+            # a group, or another zone of a Sonos chassis that an earlier version linked
+            if parent_player.state.type == PlayerType.GROUP or sonos_zones_differ(
+                parent_player, protocol_player
+            ):
                 self._clear_protocol_parent_id(protocol_player.player_id)
                 return False
             already_linked = any(
@@ -301,7 +327,10 @@ class ProtocolLinkingMixin:
 
             # Check cached protocol IDs first for fast matching on restart
             cached_ids = self._get_cached_protocol_ids(native_player.player_id)
-            if protocol_player.player_id in cached_ids:
+            # a link to another Sonos zone that an earlier version stored is dropped
+            if protocol_player.player_id in cached_ids and not sonos_zones_differ(
+                native_player, protocol_player
+            ):
                 self._add_protocol_link(native_player, protocol_player, protocol_domain)
                 if protocol_player.protocol_parent_id:
                     protocol_player.refresh_state()
@@ -1919,6 +1948,10 @@ class ProtocolLinkingMixin:
         airplay_id_a = identifiers_a.get(IdentifierType.AIRPLAY_ID)
         airplay_id_b = identifiers_b.get(IdentifierType.AIRPLAY_ID)
         if airplay_id_a and airplay_id_b and airplay_id_a.lower() != airplay_id_b.lower():
+            return False
+
+        # The renderer of another zone of a Sonos chassis shares its MAC address and IP
+        if sonos_zones_differ(player_a, player_b):
             return False
 
         # Check identifiers in order of reliability
