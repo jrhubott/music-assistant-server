@@ -2,7 +2,7 @@ name: Fork sync
 
 on:
   schedule:
-    # after the 03:45 UTC nightly tag; jrhubott/ha-apps checks edge hourly and builds it
+    # after the 03:45 UTC nightly tag; jrhubott/ha-apps checks edge and stable hourly and builds them
     - cron: "30 5 * * *"
   workflow_dispatch:
     inputs:
@@ -10,6 +10,11 @@ on:
         description: "Dry run: push nothing"
         type: boolean
         default: false
+      target:
+        description: "Branch to sync"
+        type: choice
+        options: [all, edge, stable]
+        default: all
 
 concurrency:
   group: fork-sync
@@ -25,20 +30,31 @@ jobs:
   base-image:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.pin.outputs.version }}
+      edge: ${{ steps.pin.outputs.edge }}
+      stable: ${{ steps.pin.outputs.stable }}
     steps:
       - id: pin
-        # the same base image upstream runs its dev tests in
+        # the base images upstream builds its nightly and its stable release on
         run: |
-          v=$(curl -fsSL https://raw.githubusercontent.com/music-assistant/server/dev/.github/workflows/release.yml \
-            | sed -n 's/^ *BASE_IMAGE_VERSION_NIGHTLY: *"\([^"]*\)".*/\1/p')
-          test -n "$v"
-          echo "version=$v" >> "$GITHUB_OUTPUT"
+          pin() {
+            v=$(curl -fsSL "https://raw.githubusercontent.com/music-assistant/server/$1/.github/workflows/release.yml" \
+              | sed -n "s/^ *$2: *\"\([^\"]*\)\".*/\1/p")
+            test -n "$v"
+            echo "$3=$v" >> "$GITHUB_OUTPUT"
+          }
+          pin dev BASE_IMAGE_VERSION_NIGHTLY edge
+          pin stable BASE_IMAGE_VERSION_STABLE stable
 
   sync:
     needs: base-image
+    strategy:
+      fail-fast: false
+      matrix:
+        # a scheduled run (no inputs) and "all" sync both branches
+        target: ${{ fromJSON((inputs.target == '' || inputs.target == 'all') && '["edge","stable"]' || format('["{0}"]', inputs.target)) }}
+    name: sync (${{ matrix.target }})
     runs-on: ubuntu-latest
-    container: ghcr.io/music-assistant/base:${{ needs.base-image.outputs.version }}
+    container: ghcr.io/music-assistant/base:${{ needs.base-image.outputs[matrix.target] }}
     timeout-minutes: 60
     steps:
       - name: Install build tools
@@ -67,4 +83,4 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 tools/fork_sync.py --config tools/fork-sync.json --repo-dir repo \
-            ${{ inputs.dry_run && '--dry-run' || '' }}
+            --target ${{ matrix.target }} ${{ inputs.dry_run && '--dry-run' || '' }}

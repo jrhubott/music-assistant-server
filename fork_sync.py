@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Keep this fork's `edge` branch current with upstream.
+"""Keep this fork's long-lived branches current with upstream.
 
-`edge` is upstream's base branch (dev/main) plus every feature branch you merged into it by
-hand. It is never rebased or force-pushed. Each run:
+`fork-sync.json` lists the targets. Each one is a branch of the fork (`edge_branch`, such as
+`edge` or `stable`) that is an upstream branch (`base_branch`, such as dev/main or stable) plus
+every feature branch you merged into it by hand. It is never rebased by this script. Each run
+handles one target (`--target`), or all of them in turn:
 
 1. Fetches upstream. If `edge` already contains the upstream tip, there is nothing to do.
 2. Otherwise merges upstream into `edge`, runs `test_command`, and pushes (fast-forward only),
@@ -29,10 +31,19 @@ API = "https://api.github.com"
 ISSUE_TITLE = "Fork sync needs attention"
 
 
+def load_targets(cfg: dict) -> list[dict]:
+    """Return the targets of a config, each merged with the config's shared keys."""
+    shared = {key: value for key, value in cfg.items() if key != "targets"}
+    return [{**shared, **target} for target in cfg.get("targets", [{}])]
+
+
 class Sync:
     def __init__(self, cfg: dict, args: argparse.Namespace) -> None:
         self.cfg = cfg
         self.base = cfg["base_branch"]
+        self.edge = cfg["edge_branch"]
+        # the edge target keeps the issue title it always had
+        self.issue_title = ISSUE_TITLE if self.edge == "edge" else f"{ISSUE_TITLE} ({self.edge})"
         self.dry_run = args.dry_run
         self.skip_tests = args.skip_tests
         self.fork = args.fork_remote
@@ -145,7 +156,7 @@ class Sync:
     # -- reporting ---------------------------------------------------------------
 
     def report(self) -> None:
-        lines = ["## Fork sync", ""]
+        lines = [f"## Fork sync: `{self.edge}`", ""]
         if self.problems:
             lines += ["### Needs attention", ""] + [f"- {p}" for p in self.problems] + [""]
         lines += ["### Done", ""] + [f"- {n}" for n in self.notes or ["Nothing to do."]]
@@ -164,13 +175,13 @@ class Sync:
             if not self.api(f"/repos/{repo}")["has_issues"]:
                 return
             issues = self.api(f"/repos/{repo}/issues?state=open&per_page=100")
-            issue = next((i for i in issues if i["title"] == ISSUE_TITLE and "pull_request" not in i), None)
+            issue = next((i for i in issues if i["title"] == self.issue_title and "pull_request" not in i), None)
             run_url = os.environ.get("RUN_URL", "")
             body = f"{text}\n\n{run_url}".strip()
             if self.problems and issue:
                 self.api(f"/repos/{repo}/issues/{issue['number']}/comments", "POST", {"body": body})
             elif self.problems:
-                self.api(f"/repos/{repo}/issues", "POST", {"title": ISSUE_TITLE, "body": body})
+                self.api(f"/repos/{repo}/issues", "POST", {"title": self.issue_title, "body": body})
             elif issue:
                 self.api(f"/repos/{repo}/issues/{issue['number']}/comments", "POST", {"body": "Sync is clean again.\n\n" + run_url})
                 self.api(f"/repos/{repo}/issues/{issue['number']}", "PATCH", {"state": "closed"})
@@ -200,11 +211,17 @@ def main() -> int:
     parser.add_argument("--upstream-remote", default="upstream")
     parser.add_argument("--dry-run", action="store_true", help="push nothing, touch no issues")
     parser.add_argument("--skip-tests", action="store_true")
+    parser.add_argument("--target", help="the edge_branch of the target to sync (default: all)")
     args = parser.parse_args()
     with open(args.config, encoding="utf-8") as fh:
-        cfg = json.load(fh)
+        targets = load_targets(json.load(fh))
+    if args.target:
+        targets = [t for t in targets if t["edge_branch"] == args.target]
+        if not targets:
+            parser.error(f"no target with edge_branch {args.target!r} in {args.config}")
     os.chdir(args.repo_dir)
-    return Sync(cfg, args).run()
+    # every target runs, so a failing one does not hold back the others
+    return max(Sync(target, args).run() for target in targets)
 
 
 if __name__ == "__main__":

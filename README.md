@@ -16,15 +16,27 @@ upstream into `edge` locally, resolve, and push.
 
 To add a feature: `git checkout edge && git pull && git merge feature/x && git push fork edge`.
 
+## stable
+
+`stable` is upstream `stable` (the latest release plus any backports about to be released)
+plus stable-based ports of features, merged in by hand. The same run syncs it the same way, as
+a second target in `fork-sync.json`; **Run workflow** can pick one target. Features on `dev`/`main`
+can't be merged into it: port them onto a `<feature>-stable` branch cut from upstream `stable`
+first. Cut upstream backport PRs from upstream `stable`, never from this fork's `stable`.
+
+Don't press GitHub's **Sync fork** on `stable`: it offers to discard the merged features. A
+ruleset blocks force-pushes to it.
+
 Branches listed in `rebase_features` are rebased onto upstream instead; keep a branch out of
 that list once it is merged into `edge`.
 
 [jrhubott/ha-apps](https://github.com/jrhubott/ha-apps) builds `edge` of both forks into the
-"Music Assistant Edge (jrhubott)" Home Assistant app. It checks hourly and builds when `edge` has
-a new commit.
+"Music Assistant Edge (jrhubott)" Home Assistant app, and `stable` into "Music Assistant Stable
+(jrhubott)". It checks hourly and builds a channel when one of its branches has a new commit.
 
 Needs a `SYNC_TOKEN` repository secret: a fine-grained token for this fork with
 Contents and Workflows read/write.
 
-Local clones: `git config branch.edge.rebase false`, so `git pull` on `edge` merges
-instead of flattening its merge commits.
+Local clones: `git config branch.edge.rebase false` and `git config branch.stable.rebase false`,
+so `git pull` merges instead of flattening merge commits. Upstream and the fork both have a
+`stable` branch, so create the local one with `git switch -c stable --track fork/stable`.
