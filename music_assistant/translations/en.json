@@ -2222,6 +2222,8 @@
   "provider.party.config_entries.karaoke_mode.label": "Karaoke Mode",
   "provider.party.config_entries.kiosk_link_note.label": "Show the party dashboard on a TV or tablet without signing in: create a TV link and open it in the browser on that screen. It works on your home network.",
   "provider.party.config_entries.kiosk_link_url.label": "Open this link in the browser on the TV. Anyone who has it can view the party dashboard until you revoke it: {0}",
+  "provider.party.config_entries.lyrics_delay.description": "Hold the karaoke lyrics back by this many milliseconds to match speakers that play the music late, such as AirPlay, Chromecast or Sonos groups. Use a negative value to show the lyrics earlier.",
+  "provider.party.config_entries.lyrics_delay.label": "Lyrics Delay (ms)",
   "provider.party.config_entries.mode.description": "How the party audio is played. In venue mode an existing player plays the music out loud for everyone in the room. In remote mode every guest listens on their own device (silent-disco style).",
   "provider.party.config_entries.mode.label": "Party Mode",
   "provider.party.config_entries.mode.options.remote": "Remote (guests listen on their own device)",

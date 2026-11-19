@@ -32,6 +32,7 @@ from music_assistant.providers.party import (
     CONF_ENABLE_GUEST_ACCESS,
     CONF_ENABLE_SKIP_SONG,
     CONF_PARTY_DURATION,
+    CONF_PARTY_LYRICS_DELAY,
     CONF_PARTY_MODE,
     CONF_PARTY_PLAYER,
     CONF_PARTY_PLAYER_AUTO,
@@ -467,6 +468,31 @@ async def test_get_party_config_exposes_mode(mode: str) -> None:
     config = await plugin.get_party_config()
 
     assert config.mode == mode
+
+
+@pytest.mark.asyncio
+async def test_get_party_config_exposes_lyrics_delay() -> None:
+    """get_party_config passes the karaoke lyrics delay to the dashboard."""
+    plugin = _create_party_plugin()
+    cast("MagicMock", plugin.config.get_value).side_effect = {CONF_PARTY_LYRICS_DELAY: -350}.get
+
+    config = await plugin.get_party_config()
+
+    assert config.lyrics_delay == -350
+
+
+@pytest.mark.asyncio
+async def test_get_config_entries_lyrics_delay_is_a_bounded_karaoke_option() -> None:
+    """The lyrics delay is an integer in milliseconds shown with the karaoke settings."""
+    plugin = _create_config_entries_plugin(guest_access_enabled=True)
+
+    entries = {entry.key: entry for entry in await plugin.get_config_entries()}
+
+    entry = entries[CONF_PARTY_LYRICS_DELAY]
+    assert entry.type == ConfigEntryType.INTEGER
+    assert entry.default_value == 0
+    assert entry.range == (-5000, 5000)
+    assert entry.category == "karaoke"
 
 
 @pytest.mark.asyncio
