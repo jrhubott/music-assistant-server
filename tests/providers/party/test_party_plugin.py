@@ -24,6 +24,9 @@ from music_assistant_models.errors import (
 from music_assistant.controllers.config import ConfigController
 from music_assistant.helpers.shared_playback import SharedPlaybackMode
 from music_assistant.providers.party import (
+    ACTION_CREATE_KIOSK_LINK,
+    ACTION_REPLACE_KIOSK_LINK,
+    ACTION_REVOKE_KIOSK_LINK,
     CONF_ENABLE_ADD_QUEUE,
     CONF_ENABLE_BOOST,
     CONF_ENABLE_GUEST_ACCESS,
@@ -517,7 +520,9 @@ async def test_get_party_url_passes_configured_expiry(expiry: int) -> None:
     assert mock_get_code.call_args.kwargs["expires_in_hours"] == expiry
 
 
-def _create_config_entries_plugin(*, guest_access_enabled: bool) -> PartyPlugin:
+def _create_config_entries_plugin(
+    *, guest_access_enabled: bool, kiosk_url: str | None = None
+) -> PartyPlugin:
     """Create a party plugin for exercising get_config_entries/handle_config_action."""
     plugin = PartyPlugin.__new__(PartyPlugin)
     plugin.mass = MagicMock()
@@ -527,6 +532,7 @@ def _create_config_entries_plugin(*, guest_access_enabled: bool) -> PartyPlugin:
     # instead of taking the "typed entry present" branch a MagicMock would fake
     plugin.config.values = {}
     plugin.config.get_value.side_effect = {CONF_ENABLE_GUEST_ACCESS: guest_access_enabled}.get
+    plugin._get_kiosk_url = AsyncMock(return_value=kiosk_url)  # type: ignore[method-assign]
     return plugin
 
 
@@ -573,6 +579,7 @@ def _create_unload_plugin(*, guest_access_enabled: bool) -> PartyPlugin:
     plugin._session = None
     plugin._session_lock = asyncio.Lock()
     plugin._revoke_guest_tokens = AsyncMock()  # type: ignore[method-assign]
+    plugin._revoke_kiosk_link = AsyncMock()  # type: ignore[method-assign]
     return plugin
 
 
@@ -586,7 +593,7 @@ async def test_unload_revokes_guest_tokens_when_guest_access_is_off() -> None:
     cast("AsyncMock", plugin._revoke_guest_tokens).assert_awaited_once()
     # the live stored value is what decides, not the config snapshot taken at init, and an
     # absent key must read as disabled (matching the config entry's default_value)
-    cast("MagicMock", plugin.mass.config.get_raw_provider_config_value).assert_called_once_with(
+    cast("MagicMock", plugin.mass.config.get_raw_provider_config_value).assert_any_call(
         "party--test", CONF_ENABLE_GUEST_ACCESS, default=False
     )
 
@@ -674,3 +681,91 @@ async def test_unload_revokes_guest_tokens_after_a_real_save_of_guest_access_off
     await plugin.unload()
 
     cast("AsyncMock", plugin._revoke_guest_tokens).assert_awaited_once()
+
+
+KIOSK_URL = "http://192.168.1.10:8095?dashboard=ABCD1234&path=%2Fparty&kiosk=1"
+KIOSK_ENTRY_KEYS = (
+    "kiosk_link_note",
+    "kiosk_link_url",
+    ACTION_CREATE_KIOSK_LINK,
+    ACTION_REPLACE_KIOSK_LINK,
+    ACTION_REVOKE_KIOSK_LINK,
+)
+
+
+@pytest.mark.parametrize("kiosk_url", [None, KIOSK_URL])
+@pytest.mark.asyncio
+async def test_get_config_entries_shows_the_tv_link(kiosk_url: str | None) -> None:
+    """Without a TV link only the note and create button show; with one, its URL and buttons."""
+    plugin = _create_config_entries_plugin(guest_access_enabled=False, kiosk_url=kiosk_url)
+
+    by_key = {entry.key: entry for entry in await plugin.get_config_entries()}
+
+    visible = {key for key in KIOSK_ENTRY_KEYS if not by_key[key].hidden}
+    if kiosk_url is None:
+        assert visible == {"kiosk_link_note", ACTION_CREATE_KIOSK_LINK}
+    else:
+        assert visible == {"kiosk_link_url", ACTION_REPLACE_KIOSK_LINK, ACTION_REVOKE_KIOSK_LINK}
+        assert by_key["kiosk_link_url"].translation_params == [kiosk_url]
+
+
+@pytest.mark.parametrize("action", [ACTION_CREATE_KIOSK_LINK, ACTION_REPLACE_KIOSK_LINK])
+@pytest.mark.asyncio
+async def test_handle_config_action_creates_the_tv_link(action: str) -> None:
+    """Create and replace both mint a new TV link and re-render the entries."""
+    plugin = _create_config_entries_plugin(guest_access_enabled=False, kiosk_url=KIOSK_URL)
+    plugin.logger = MagicMock()
+
+    with patch("music_assistant.providers.party.create_kiosk_code", new=AsyncMock()) as mock_create:
+        entries = await plugin.handle_config_action(action)
+
+    mock_create.assert_awaited_once_with(plugin.mass)
+    assert isinstance(entries, tuple)
+    assert "kiosk_link_url" in {entry.key for entry in entries}
+
+
+@pytest.mark.asyncio
+async def test_handle_config_action_revokes_the_tv_link() -> None:
+    """The revoke button revokes the TV link and re-renders the entries."""
+    plugin = _create_config_entries_plugin(guest_access_enabled=False)
+    revoke = AsyncMock()
+    plugin._revoke_kiosk_link = revoke  # type: ignore[method-assign]
+
+    entries = await plugin.handle_config_action(ACTION_REVOKE_KIOSK_LINK)
+
+    revoke.assert_awaited_once()
+    assert isinstance(entries, tuple)
+
+
+@pytest.mark.asyncio
+async def test_unload_keeps_tv_link_when_guest_access_is_off() -> None:
+    """The TV link does not depend on guest access, so switching it off keeps the link."""
+    plugin = _create_unload_plugin(guest_access_enabled=False)
+    plugin.mass.config = await _create_stored_config_controller(guest_access_enabled=False)
+
+    await plugin.unload()
+
+    cast("AsyncMock", plugin._revoke_kiosk_link).assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unload_revokes_tv_link_when_provider_is_disabled() -> None:
+    """Disabling the plugin revokes the TV link."""
+    plugin = _create_unload_plugin(guest_access_enabled=True)
+    plugin.mass.config = await _create_stored_config_controller(
+        guest_access_enabled=True, provider_enabled=False
+    )
+
+    await plugin.unload()
+
+    cast("AsyncMock", plugin._revoke_kiosk_link).assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_unload_revokes_tv_link_on_removal() -> None:
+    """Removing the plugin revokes the TV link."""
+    plugin = _create_unload_plugin(guest_access_enabled=True)
+
+    await plugin.unload(is_removed=True)
+
+    cast("AsyncMock", plugin._revoke_kiosk_link).assert_awaited_once()
