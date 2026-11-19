@@ -18,6 +18,7 @@ from music_assistant_models.auth import Scope
 from music_assistant_models.constants import PLAYER_CONTROL_NONE
 from music_assistant_models.enums import PlaybackState, PlayerType, ProviderFeature
 from music_assistant_models.errors import (
+    PlayerCommandFailed,
     PlayerUnavailableError,
     ProviderUnavailableError,
     UnsupportedFeaturedException,
@@ -262,7 +263,9 @@ class GroupCommandsMixin(_PlayerControllerBase):
             or (ATTR_ENABLED in changed_values and changed_values[ATTR_ENABLED][1] is False)
             or player.offline_by_power_control
         )
-        if became_inactive and (player.active_group or player.synced_to):
+        if became_inactive and (
+            player.active_group or player.synced_to or self.followers_of(player.player_id)
+        ):
             self.mass.create_task(self._cleanup_player_memberships(player.player_id))
 
         # A player whose power was turned off outside of an MA power command (e.g. its
@@ -292,7 +295,62 @@ class GroupCommandsMixin(_PlayerControllerBase):
 
     async def _cleanup_player_memberships(self, player_id: str) -> None:
         """Ensure a player is detached from any groups or syncgroups."""
+        # following is no protocol group: a follower lets go of its leader, and a leader
+        # that can no longer play lets go of its followers
+        if self.followed_player(player_id) is not None:
+            await self._unfollow(player_id)
+        for follower_id in self.followers_of(player_id):
+            await self._unfollow(follower_id)
         await apply_group_change(self, GroupChange(kind=ChangeKind.LEAVE, target_id=player_id))
+
+    async def _follow(self, leader_id: str, follower_id: str) -> None:
+        """
+        Let a player follow a leader instead of joining its group.
+
+        Skips permission checks and locking (internal use only).
+
+        :param leader_id: The player to follow.
+        :param follower_id: The player that follows it.
+        """
+        follower = self.get_player(follower_id)
+        protocol = follower.own_protocol if follower is not None else None
+        if protocol is None or not protocol.can_follow:
+            raise PlayerCommandFailed(f"Player {follower_id} can not follow another player")
+        if (previous := self._follows.get(follower_id)) == leader_id:
+            return
+        if previous is not None:
+            await self._unfollow(follower_id)
+        await protocol.follow(leader_id)
+        self._follows[follower_id] = leader_id
+        self._update_follow_states(leader_id, follower_id)
+
+    async def _unfollow(self, follower_id: str) -> None:
+        """
+        Let a player stop following its leader.
+
+        Skips permission checks and locking (internal use only).
+
+        :param follower_id: The player that follows.
+        """
+        if (leader_id := self._follows.pop(follower_id, None)) is None:
+            return
+        follower = self.get_player(follower_id)
+        protocol = follower.own_protocol if follower is not None else None
+        try:
+            if protocol is not None and protocol.can_follow:
+                await protocol.unfollow()
+        finally:
+            self._update_follow_states(leader_id, follower_id)
+
+    def _update_follow_states(self, *player_ids: str) -> None:
+        """
+        Publish the state of the players a change of following touched.
+
+        :param player_ids: The leader and the follower.
+        """
+        for player_id in player_ids:
+            if (player := self.get_player(player_id)) is not None:
+                player.update_state()
 
     async def _detach_member(self, member: Player) -> None:
         """

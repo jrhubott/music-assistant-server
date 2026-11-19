@@ -22,6 +22,7 @@ from music_assistant_models.errors import (
 from music_assistant.controllers.players.grouping_plan import (
     ChangeKind,
     Detach,
+    Follow,
     GroupChange,
     GroupCommand,
     GroupingSnapshot,
@@ -47,8 +48,10 @@ from music_assistant.controllers.players.grouping_plan import (
     ReleaseSession,
     SetMembers,
     TransferLeadership,
+    Unfollow,
     Ungroup,
     elect_ad_hoc_leader,
+    followers_to_join,
     plan_group_change,
     set_members_group,
 )
@@ -1255,3 +1258,153 @@ def test_an_output_of_the_leader_that_can_not_play_is_no_common_output() -> None
     calls, notes = _decided(world, "p", ("x",))
     assert calls == []
     assert any("no compatible grouping method found" in n for n in _notes(notes, logging.WARNING))
+
+
+def _with_light(world: _World, **light: Any) -> None:
+    """Add Sonos leader s (AirPlay too), Sonos b and light h, whose own protocol is Sendspin."""
+    world.protocol("sonos_s", "s", "sonos", role=ProtocolRole.NATIVE, can=("sonos_b",))
+    world.protocol("airplay_s", "s", "airplay")
+    world.protocol("sendspin_s", "s", "sendspin", can=("sendspin_h",))
+    world.player(
+        "s",
+        "sonos_s",
+        "airplay_s",
+        "sendspin_s",
+        can_group_with=frozenset({"b", "h"}),
+        playback_state=PLAYING,
+        active_output=light.pop("leader_output", "native"),
+    )
+    world.protocol("sonos_b", "b", "sonos", role=ProtocolRole.NATIVE)
+    world.player("b", "sonos_b")
+    world.protocol("sendspin_h", "h", "sendspin", role=ProtocolRole.NATIVE, features=PLAYS)
+    world.player(
+        "h",
+        "sendspin_h",
+        type=light.pop("type", PlayerType.LIGHT),
+        follow_domains=light.pop("follow_domains", frozenset({"sonos"})),
+        **light,
+    )
+
+
+def test_a_light_follows_a_leader_that_plays_over_its_own_protocol() -> None:
+    """A light joining a native Sonos leader follows it: no protocol join moves the leader."""
+    world = _World()
+    _with_light(world)
+    plan = _all_plans(world, ChangeKind.MEMBERS, "s", ("h",))
+    assert _calls(plan) == [
+        PrepareForPlayback(player_id="h"),
+        Follow(leader_id="s", member_id="h"),
+    ]
+    assert plan.join is None
+
+
+def test_a_light_follows_beside_a_speaker_that_joins() -> None:
+    """In a mixed request the speaker joins the protocol group and the light follows."""
+    world = _World()
+    _with_light(world)
+    plan = _all_plans(world, ChangeKind.MEMBERS, "s", ("h", "b"))
+    assert Follow(leader_id="s", member_id="h") in _calls(plan)
+    assert plan.join is not None
+    assert plan.join.add == ("b",)
+
+
+def test_a_light_joins_a_leader_that_plays_over_its_protocol() -> None:
+    """A leader already playing over Sendspin takes the light into that group."""
+    world = _World()
+    _with_light(world, leader_output="sendspin_s")
+    plan = _all_plans(world, ChangeKind.MEMBERS, "s", ("h",))
+    assert not any(isinstance(step, Follow) for step in plan.steps)
+    assert plan.join is not None
+    assert plan.join.add == ("h",)
+
+
+@pytest.mark.parametrize(
+    "light",
+    [
+        {"follow_domains": frozenset()},
+        {"follow_domains": frozenset({"chromecast"})},
+        {"type": PlayerType.PLAYER},
+        {"leader_output": "airplay_s"},
+    ],
+    ids=["cannot-follow", "follows-other-protocols", "renders-audio", "leader-on-airplay"],
+)
+def test_only_a_non_audio_player_that_can_follow_follows(light: dict[str, Any]) -> None:
+    """
+    A player joins the protocol group unless it renders no audio and can follow the leader.
+
+    It can follow a leader only on a protocol it names in follow_domains: a light that only
+    follows Sonos joins a Sonos speaker that plays over AirPlay like any other member.
+    """
+    world = _World()
+    _with_light(world, **light)
+    plan = _all_plans(world, ChangeKind.MEMBERS, "s", ("h",))
+    assert not any(isinstance(step, Follow) for step in plan.steps)
+    assert plan.join is not None
+    assert plan.join.add == ("h",)
+
+
+def test_removing_a_follower_unfollows_it() -> None:
+    """A follower taken out of the group stops following; the protocol group is untouched."""
+    world = _World()
+    _with_light(world, follows="s", synced_to="s")
+    world.players["s"] = replace(world.players["s"], followers=("h",), group_members=("s", "h"))
+    plan = _all_plans(world, ChangeKind.MEMBERS, "s", None, remove=("h",))
+    assert _calls(plan) == [Unfollow(member_id="h")]
+    assert plan.join is None
+
+
+def test_detaching_a_follower_unfollows_it() -> None:
+    """Ungrouping a follower stops following: there is no group to leave on a device."""
+    world = _World()
+    _with_light(world, follows="s", synced_to="s")
+    world.players["s"] = replace(world.players["s"], followers=("h",), group_members=("s", "h"))
+    plan = _all_plans(world, ChangeKind.DETACH, "h")
+    assert _calls(plan) == [Unfollow(member_id="h")]
+
+
+@pytest.mark.parametrize(
+    ("leader_output", "expected"),
+    [("native", ()), ("sendspin_s", ("h",))],
+    ids=["native", "sendspin"],
+)
+def test_a_follower_joins_once_its_leader_plays_over_its_protocol(
+    leader_output: str, expected: tuple[str, ...]
+) -> None:
+    """A follower of a leader that moved onto Sendspin can join that group as a member."""
+    world = _World()
+    _with_light(world, follows="s", synced_to="s", leader_output=leader_output)
+    world.players["s"] = replace(world.players["s"], followers=("h",))
+    assert followers_to_join(world.snapshot(), "s") == expected
+
+
+def _light_left_on_sendspin(world: _World, *others: str) -> None:
+    """Let Sonos leader s play over Sendspin with light h, and any other members, grouped."""
+    _with_light(world, leader_output="sendspin_s", synced_to="s")
+    world.protocols["sendspin_s"] = replace(
+        world.protocols["sendspin_s"],
+        group_members=("sendspin_s", "sendspin_h", *(f"sendspin_{other}" for other in others)),
+    )
+    for other in others:
+        world.protocol(f"sendspin_{other}", other, "sendspin", role=ProtocolRole.NATIVE)
+        world.player(other, f"sendspin_{other}")
+
+
+def test_a_light_left_on_sendspin_follows_again_at_a_fresh_start() -> None:
+    """Once the last Sendspin speaker left, the leader regroups natively and the light follows."""
+    world = _World()
+    _light_left_on_sendspin(world)
+    plan = _plan(world, ChangeKind.REGROUP_FOR_START, "s")
+    assert plan.regroup == Regroup(
+        leader_id="s",
+        protocol_id="sendspin_s",
+        removed=("sendspin_h",),
+        member_ids=(),
+        follower_ids=("h",),
+    )
+
+
+def test_a_light_beside_a_sendspin_speaker_stays_a_member() -> None:
+    """A Sendspin speaker still needs the group on Sendspin, so the light stays a member."""
+    world = _World()
+    _light_left_on_sendspin(world, "x")
+    assert _plan(world, ChangeKind.REGROUP_FOR_START, "s").regroup is None

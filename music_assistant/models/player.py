@@ -136,6 +136,9 @@ _CONFIG_CACHED_PROPS = frozenset({"_hide_in_ui", "_expose_to_ha"})
 # the others are its audio protocols.
 OWN_PROTOCOL_ROLES = frozenset({ProtocolRole.NATIVE, ProtocolRole.CONTROL, ProtocolRole.VIRTUAL})
 
+# the types of player another player can follow: a single device that renders audio itself
+FOLLOWABLE_LEADER_TYPES = frozenset({PlayerType.PLAYER, PlayerType.STEREO_PAIR})
+
 # Audio protocols that take volume and mute commands without a stream running, in the
 # order they are preferred for it (airplay and sendspin only do while streaming).
 _CONTROL_PRIORITY = {"chromecast": 0, "dlna": 1, "airplay": 2, "sendspin": 3}
@@ -2430,6 +2433,9 @@ class Player:
                 can_group_with = self._collect_can_group_with(peers, own_protocol)
             for protocol in self._audio_protocols:
                 protocol_can_group_with |= self._collect_can_group_with(peers, protocol)
+        follows, followers, followable = self._collect_follows(
+            peers, can_lead=not grouping_locked and not own.synced_to
+        )
         groups = self._collect_groups(peers)
         session = self.mass.players.get_audio_source_session(self.player_id)
         source_ids = {self._active_mass_source, own.active_source}
@@ -2509,12 +2515,52 @@ class Player:
                 else None
             ),
             standing_sources=self._collect_standing_sources(),
+            follows=follows,
+            followers=followers,
+            followable=followable,
         )
         # stream metadata and artwork are only looked up for the queue the player takes its
         # media from
         if queues and (media_queue := resolve_media_queue(inputs)):
             self._resolve_artwork(media_queue)
         return inputs
+
+    def _collect_follows(
+        self, peers: dict[str, PeerSnapshot], can_lead: bool
+    ) -> tuple[str | None, tuple[str, ...], frozenset[str]]:
+        """
+        Collect who the player follows, who follows it and who could, and the players named.
+
+        Returns the player it follows, its followers and the players that can follow it.
+
+        :param peers: The peers collected so far, by id.
+        :param can_lead: Whether the player can take members at all now.
+        """
+        players = self.mass.players
+        follows = players.followed_player(self.player_id)
+        if follows is not None:
+            self._collect_peer(peers, follows, by_player_id=True)
+        followers = tuple(players.followers_of(self.player_id))
+        for follower_id in followers:
+            self._collect_peer(peers, follower_id, as_member=True, by_player_id=True)
+        followable: set[str] = set()
+        own = self.own_protocol
+        own_domain = own.provider.domain if own is not None else None
+        # only a player that renders audio itself has something to follow
+        if can_lead and follows is None and self.reported_type in FOLLOWABLE_LEADER_TYPES:
+            for protocol in players.iter_protocols():
+                candidate = protocol.player
+                if (
+                    candidate is None
+                    or candidate is self
+                    or own_domain not in protocol.follow_domains
+                    or candidate.own_protocol is not protocol
+                    or players.followed_player(candidate.player_id) is not None
+                ):
+                    continue
+                self._add_peer(peers, candidate.player_id, candidate)
+                followable.add(candidate.player_id)
+        return follows, followers, frozenset(followable)
 
     def _collect_protocols(
         self, peers: dict[str, PeerSnapshot], probe_synced_to: bool

@@ -1027,6 +1027,8 @@ ATTR_GROUP_MEMBERS: Final[str] = "group_members"
 ATTR_GROUP_VOLUME_SNAPSHOT: Final[str] = "group_volume_snapshot"
 ATTR_VOLUME_TARGET: Final[str] = "volume_target"
 ATTR_ENABLED: Final[str] = "enabled"
+# the id of the player a light follows instead of joining its group, see players/README.md
+ATTR_FOLLOWS: Final[str] = "follows"
 ATTR_AVAILABLE: Final[str] = "available"
 ATTR_REACHABLE: Final[str] = "reachable"
 ATTR_POWERED: Final[str] = "powered"

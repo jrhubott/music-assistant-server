@@ -616,6 +616,25 @@ class PlayerProtocol(ABC):
         """
         return False
 
+    @property
+    def follow_domains(self) -> frozenset[str]:
+        """
+        Return the protocol domains of the leaders this player can follow.
+
+        A player that renders no audio itself (a light, a visualizer) and can take what a
+        leader plays from the leader's own buffered audio follows a leader that plays over
+        one of these protocols (e.g. "sonos"): the leader keeps playing over its own protocol,
+        and this player is shown as a member of its group. Grouped with any other leader it
+        joins a protocol group as usual. A follower implements :meth:`follow` and
+        :meth:`unfollow`.
+        """
+        return frozenset()
+
+    @property
+    def can_follow(self) -> bool:
+        """Return whether this player can follow a leader on any protocol."""
+        return bool(self.follow_domains)
+
     def is_native_group_compatible(self, other: PlayerProtocol) -> bool:
         """
         Return whether this player can natively group with the given player.
@@ -1126,6 +1145,24 @@ class PlayerProtocol(ABC):
         target = self.provider.get_protocol(target_protocol_id, raise_unavailable=True)
         assert target  # for type checking
         await target.set_members(player_ids_to_add=[self.protocol_id])
+
+    async def follow(self, player_id: str) -> None:
+        """
+        Start following what a player plays.
+
+        Will only be called if :attr:`can_follow` is set.
+
+        :param player_id: The player to follow.
+        """
+        raise NotImplementedError("follow needs to be implemented when can_follow is set")
+
+    async def unfollow(self) -> None:
+        """
+        Stop following a player.
+
+        Will only be called if :attr:`can_follow` is set.
+        """
+        raise NotImplementedError("unfollow needs to be implemented when can_follow is set")
 
     async def ungroup(self) -> None:
         """

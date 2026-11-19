@@ -333,7 +333,10 @@ def use_player_registry(mass: MagicMock | MusicAssistant) -> MagicMock:
     players._players = {}
     players._protocols = {}
     players._legacy_ids = {}
+    players._follows = {}
     for lookup in (
+        "followed_player",
+        "followers_of",
         "get_player",
         "resolve_player_id",
         "get_protocol",

@@ -4272,3 +4272,33 @@ class TestProtocolLookups:
 
         assert sgp.active_source == "spotify"
         assert sgp.source_list == native.source_list
+
+
+def _domain_member(domains: set[str], *, follow_domains: frozenset[str] = frozenset()) -> MagicMock:
+    """Return an online member with the given playback paths."""
+    member = MagicMock(available=True, offline_by_power_control=False, playback_domains=domains)
+    member.own_protocol.follow_domains = follow_domains
+    return member
+
+
+@pytest.mark.parametrize(
+    ("follow_domains", "domain", "expected"),
+    [
+        (frozenset({"sonos"}), "sonos", True),
+        (frozenset(), "sonos", False),
+        (frozenset({"sonos"}), "airplay", False),
+    ],
+    ids=["follower", "speaker", "follower-of-another-protocol"],
+)
+def test_a_member_that_follows_does_not_hold_the_group_on_a_protocol(
+    follow_domains: frozenset[str], domain: str, expected: bool
+) -> None:
+    """A light that can follow the leader on a domain needs no path on it; others do."""
+    members = {
+        "sonos": _domain_member({"sonos", "airplay"}),
+        "light": _domain_member({"sendspin"}, follow_domains=follow_domains),
+    }
+    sgp = MagicMock(_attr_group_members=list(members))
+    sgp.mass.players.get_player = MagicMock(side_effect=members.get)
+
+    assert SyncGroupPlayer._all_members_can_play_on_domain(sgp, domain) is expected

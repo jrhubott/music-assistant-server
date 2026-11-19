@@ -16,6 +16,7 @@ from music_assistant.controllers.players.grouping_plan import (
     ChangeKind,
     Detach,
     Failure,
+    Follow,
     GroupChange,
     GroupingSnapshot,
     GroupPlan,
@@ -24,7 +25,9 @@ from music_assistant.controllers.players.grouping_plan import (
     MemberLists,
     MemberStage,
     Refuse,
+    Regroup,
     SetMembers,
+    Unfollow,
     Ungroup,
 )
 from scripts.build_translations import build_translations_source
@@ -51,6 +54,13 @@ class _Players:
         self.waits: list[tuple[str, float]] = []
         self._detach_member = AsyncMock()
         self.cmd_set_members = AsyncMock()
+        self._follow = AsyncMock()
+        self._unfollow = AsyncMock()
+        self.followers: dict[str, list[str]] = {}
+
+    def followers_of(self, player_id: str) -> list[str]:
+        """Return the followers of a player."""
+        return self.followers.get(player_id, [])
 
     def get_protocol(self, protocol_id: str) -> Any:
         """Return a protocol by id."""
@@ -266,3 +276,58 @@ async def test_the_change_calls_the_target_object_it_holds() -> None:
     with _plans(GroupPlan((MemberChange(target_id="leader", add=("m",)),))):
         await grouping.apply_group_change(players, CHANGE, held)  # type: ignore[arg-type]
     players._handle_set_members.assert_awaited_once_with(held, player_ids_to_add=["m"])
+
+
+async def test_follow_steps_go_to_the_controller() -> None:
+    """Follow and Unfollow steps start and stop following through the players controller."""
+    players = _Players()
+    plan = GroupPlan((Follow(leader_id="leader", member_id="light"), Unfollow(member_id="other")))
+    with _plans(plan):
+        await grouping.apply_group_change(players, CHANGE)  # type: ignore[arg-type]
+    players._follow.assert_awaited_once_with("leader", "light")
+    players._unfollow.assert_awaited_once_with("other")
+    players._handle_set_members.assert_not_awaited()
+
+
+async def test_followers_join_the_group_once_it_plays_over_their_protocol() -> None:
+    """After a join moved the leader onto their protocol, its followers become members."""
+    players = _Players()
+    players.followers["leader"] = ["light"]
+    with (
+        _plans(GroupPlan(())) as scripted,
+        patch.object(grouping, "followers_to_join", MagicMock(return_value=("light",))),
+    ):
+        await grouping._join_followers(players, "leader")  # type: ignore[arg-type]
+    players._unfollow.assert_awaited_once_with("light")
+    change = scripted.call_args_list[0].args[1]
+    assert change == GroupChange(kind=ChangeKind.MEMBERS, target_id="leader", add=("light",))
+
+
+async def test_followers_that_still_follow_are_left_alone() -> None:
+    """A leader that still plays over another protocol keeps its followers following."""
+    players = _Players()
+    players.followers["leader"] = ["light"]
+    with (
+        _plans() as scripted,
+        patch.object(grouping, "followers_to_join", MagicMock(return_value=())),
+    ):
+        await grouping._join_followers(players, "leader")  # type: ignore[arg-type]
+    players._unfollow.assert_not_awaited()
+    scripted.assert_not_called()
+
+
+async def test_a_regroup_lets_its_lights_follow_again() -> None:
+    """The lights a regroup takes off the protocol follow the leader once it joined afresh."""
+    players = _Players()
+    run = MagicMock(players=players)
+    regroup = Regroup(
+        leader_id="leader",
+        protocol_id="sendspin_leader",
+        removed=(),
+        member_ids=(),
+        follower_ids=("light",),
+    )
+    with patch.object(grouping, "_join", AsyncMock()) as join:
+        await grouping._regroup(run, regroup)
+    join.assert_awaited_once()
+    players._follow.assert_awaited_once_with("leader", "light")

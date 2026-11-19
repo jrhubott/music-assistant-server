@@ -10,6 +10,10 @@
     "sendspin_static_delay_disconnected": {
       "label": "You can adjust the playback delay again once this device is back."
     },
+    "follow_delay_ms": {
+      "label": "Delay while following a speaker (ms)",
+      "description": "When this light follows a speaker that plays over its own protocol (AirPlay, Chromecast, Sonos...), render the light effects this many milliseconds later than the position the speaker reports. Increase if the lights run ahead of the music, decrease (or go negative) if they lag it."
+    },
     "preferred_sendspin_format": {
       "label": "Preferred audio format",
       "description": "Select the audio format to use for playback on this player. Automatic uses the player's preferred codec, at the rate set by \"Sample rate selection\".",

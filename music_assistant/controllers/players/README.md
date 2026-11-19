@@ -781,6 +781,59 @@ entry; the plan decides how. A group player's provider (sync group, universal gr
 own members, its leader and when it forms, and reaches the plan through `_handle_set_members` on
 its leader.
 
+### Followers
+
+A player that renders no audio can follow a leader instead of joining a protocol group with it. It
+needs no protocol in common with the leader, so the leader keeps its output. Today that is a Hue
+entertainment area: a Sendspin light whose bridge reads the features of the audio the leader
+already plays from the buffer of its queue item, timed to the leader's reported position.
+
+- **Who follows.** The planner (`_divert_followers` in `_Planner._members`) takes a member out of
+  the protocol join and plans `Follow(leader_id, member_id)` when the member is not a playback
+  target, the leader is a player or a stereo pair, and the protocol domain the leader plays over
+  (its active output, else its own protocol) is one the member's own protocol lists in
+  `follow_domains` and not the member's own. A leader on any other protocol takes the light into
+  a protocol group like any other member. A leader that already plays over
+  Sendspin takes the light into that group like any other member.
+- **What leaves.** Removing or ungrouping a follower plans `Unfollow(member_id)`, as do the release
+  of a follower before it joins elsewhere and the detach of a follower. Removing a player, and the
+  membership cleanup of a player that leaves or goes away, let it and its followers go.
+- **Registry.** The controller keeps who follows whom (`_follows`, follower to leader), and
+  `_follow` / `_unfollow` call `PlayerProtocol.follow` / `unfollow` and update both players.
+  `followed_player` and `followers_of` read it.
+- **State.** `StateInputs.followers` adds the followers to the leader's `group_members`, after its
+  protocol members; `StateInputs.follows` makes the follower read as synced to its leader. A leader
+  lists the players that can follow its own protocol (`followable`) in `can_group_with` without a
+  common protocol, and leaves its followers out of group volume. The follower names its leader in
+  `extra_attributes["follows"]` (`ATTR_FOLLOWS`), so a client can tell it from a protocol member.
+- **Provider side.** A protocol that can follow lists the leader domains it follows in
+  `follow_domains` (`can_follow` is true while that is not empty) and implements `follow` and
+  `unfollow`. For Sendspin, a bridge registers a `BridgeFollowHandler` for its client
+  (`register_bridge_follow_handler`), and `SendspinVisualizerPlayer` takes `follow_domains` from
+  it and hands the calls to it. The Hue bridge registers one only while its provider's
+  `follow_speakers` option is on, and follows Sonos only for now. A sync
+  group does not hold its members on a protocol for a member that follows. The visualizer player
+  offers a `follow_delay_ms` setting while its bridge can follow, and hands it to the handler
+  (`set_follow_delay`) before it follows and whenever the setting changes. The Hue bridge reads
+  the audio of the queue item the leader plays from its buffer; a live source (Spotify Connect,
+  an AirPlay receiver, a line-in) has no such buffer, so the lights stay dark and the bridge logs
+  why once per source.
+
+- **Commands.** A playback command for a follower (play, pause, stop, next, previous, seek,
+  shuffle, repeat, play media) is refused (`_refuse_follower`) instead of going to its leader as
+  it would for a synced player: the light plays nothing itself.
+- **Becoming a member.** After a join or a regroup, `_join_followers` checks the leader again
+  (`followers_to_join`): once the group plays over a follower's protocol, for instance because a
+  Sendspin speaker joined and moved it onto Sendspin, the follower stops following and joins the
+  protocol group as a member.
+- **Following again.** Once the last member that needs that protocol leaves, the group stays on
+  it until the next fresh start, as any group does. The regroup at that start
+  (`_regroup_for_start`) leaves out the members that would follow a leader on its own protocol
+  (`follows_natively`), takes them off the protocol with the rest, and lets them follow the leader
+  again (`Regroup.follower_ids`).
+
+See GROUP-62 in [SCENARIOS.md](SCENARIOS.md).
+
 ## Locking
 
 Player commands are serialized per player and purpose with `get_player_lock` ([locks.py](locks.py)):

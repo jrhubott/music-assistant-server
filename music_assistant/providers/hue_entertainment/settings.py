@@ -7,9 +7,11 @@ from typing import TYPE_CHECKING
 from .constants import (
     CONF_BRIGHTNESS,
     CONF_COLOR_MODE,
+    CONF_FOLLOW_SPEAKERS,
     CONF_HUE_LATENCY_MS,
     DEFAULT_BRIGHTNESS,
     DEFAULT_COLOR_MODE,
+    DEFAULT_FOLLOW_SPEAKERS,
     DEFAULT_HUE_LATENCY_MS,
 )
 
@@ -46,3 +48,13 @@ def get_hue_latency_ms(config: ProviderConfig) -> int:
     """
     value = config.get_value(CONF_HUE_LATENCY_MS)
     return DEFAULT_HUE_LATENCY_MS if value is None else int(float(str(value)))
+
+
+def get_follow_speakers(config: ProviderConfig) -> bool:
+    """
+    Return whether the lights follow a Sonos speaker on its native protocol.
+
+    :param config: Provider config to read the setting from.
+    """
+    value = config.get_value(CONF_FOLLOW_SPEAKERS)
+    return DEFAULT_FOLLOW_SPEAKERS if value is None else bool(value)

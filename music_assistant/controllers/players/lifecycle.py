@@ -1046,6 +1046,11 @@ class PlayerLifecycleMixin(_PlayerControllerBase):
 
         :param player: The player that is removed.
         """
+        # following is no protocol group, so the change below does not see it
+        with suppress(Exception):
+            await self._unfollow(player.player_id)
+            for follower_id in self.followers_of(player.player_id):
+                await self._unfollow(follower_id)
         try:
             if self._resolve_playback_owner(player) is player:
                 if player.available_for_playback and player.playback_state != PlaybackState.IDLE:

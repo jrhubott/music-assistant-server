@@ -65,6 +65,7 @@ def _sendspin(scenario: Scenario, approvals: Approvals) -> Any:
     provider.is_virtual_player = lambda _client_id: False
     provider.is_held_unapproved = lambda _client_id: False
     provider.pairing_config_snapshot = lambda _client_id: None
+    provider.get_bridge_follow_handler = lambda _client_id: None
 
     async def _set_trusted_unpaired(
         client_id: str, enabled: bool, *, allow_input: bool = False

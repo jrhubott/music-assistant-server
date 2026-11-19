@@ -46,6 +46,7 @@ from music_assistant_models.queue_item import QueueItem
 from music_assistant_models.streamdetails import StreamDetails, StreamMetadata
 from music_assistant_models.unique_list import UniqueList
 
+from music_assistant.constants import ATTR_FOLLOWS
 from music_assistant.controllers.players.audio_sources import AudioSourceSession
 from music_assistant.models.player_state import (
     GroupSnapshot,
@@ -2351,3 +2352,78 @@ class TestReconcilePositionAnchor:
         assert position == 15.2
         assert timestamp == NOW
         assert not jumped
+
+
+class TestFollowers:
+    """A light that follows a leader instead of joining a protocol group with it."""
+
+    def test_leader_lists_its_followers_as_members(self) -> None:
+        """A follower is in the leader's group, though no protocol group holds it."""
+        state = _derive(
+            followers=("light",),
+            peers={PLAYER_ID: _peer(PLAYER_ID), "light": _peer("light", type=PlayerType.LIGHT)},
+        )
+
+        assert state.group_members == [PLAYER_ID, "light"]
+
+    def test_followers_come_after_protocol_members(self) -> None:
+        """A leader with speakers in its group lists them first, then the followers."""
+        state = _derive(
+            own=_own(group_members=[PLAYER_ID, "member"]),
+            followers=("light",),
+            peers={
+                PLAYER_ID: _peer(PLAYER_ID),
+                "member": _peer("member"),
+                "light": _peer("light", type=PlayerType.LIGHT),
+            },
+        )
+
+        assert state.group_members == [PLAYER_ID, "member", "light"]
+
+    def test_follower_is_synced_to_its_leader(self) -> None:
+        """A follower reads as synced to the player it follows, and has no members of its own."""
+        state = _derive(
+            player_type=PlayerType.LIGHT,
+            follows="leader",
+            peers={"leader": _peer("leader"), PLAYER_ID: _peer(PLAYER_ID)},
+        )
+
+        assert state.synced_to == "leader"
+        assert state.group_members == []
+        assert state.can_group_with == set()
+
+    def test_follower_names_the_player_it_follows(self) -> None:
+        """A follower publishes its leader in its extra attributes; others publish none."""
+        follower = _derive(
+            player_type=PlayerType.LIGHT,
+            follows="leader",
+            peers={"leader": _peer("leader"), PLAYER_ID: _peer(PLAYER_ID)},
+        )
+        speaker = _derive()
+
+        assert follower.extra_attributes[ATTR_FOLLOWS] == "leader"
+        assert ATTR_FOLLOWS not in speaker.extra_attributes
+
+    def test_follower_of_an_unknown_leader_is_not_synced(self) -> None:
+        """A follower whose leader is gone is synced to nothing."""
+        state = _derive(player_type=PlayerType.LIGHT, follows="leader", peers={})
+
+        assert state.synced_to is None
+
+    def test_followable_players_are_offered_without_a_common_protocol(self) -> None:
+        """A player that can follow is offered though the two share no protocol."""
+        state = _derive(
+            followable=frozenset({"light"}),
+            peers={"light": _peer("light", type=PlayerType.LIGHT)},
+        )
+
+        assert state.can_group_with == {"light"}
+
+    def test_unavailable_followable_player_is_left_out(self) -> None:
+        """A player that can follow but is gone is no target."""
+        state = _derive(
+            followable=frozenset({"light"}),
+            peers={"light": _peer("light", type=PlayerType.LIGHT, available=False)},
+        )
+
+        assert state.can_group_with == set()

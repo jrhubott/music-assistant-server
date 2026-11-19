@@ -183,6 +183,7 @@ _OUTPUT_DELAY_COMMANDS = frozenset({PlayerCommand.SET_OUTPUT_DELAY, PlayerComman
 
 # Config constants for Sendspin audio format
 CONF_PREFERRED_SENDSPIN_FORMAT = "preferred_sendspin_format"
+CONF_FOLLOW_DELAY_MS = "follow_delay_ms"
 SENDSPIN_FORMAT_AUTOMATIC = "automatic"
 
 # Player types that can render a line-in, so groups and pairs stay selectable.
@@ -351,6 +352,7 @@ if TYPE_CHECKING:
     from music_assistant.providers.hass import HomeAssistantProvider
     from music_assistant.providers.sendspin_source.provider import SendspinSourceProvider
 
+    from .bridge_role import BridgeFollowHandler
     from .provider import PinPairingSession, SendspinProvider
 
 
@@ -3367,6 +3369,51 @@ class SendspinVisualizerPlayer(SendspinBasePlayer):
         self._attr_can_group_with = {provider.instance_id}
         self._attr_supported_features = {PlayerFeature.SET_MEMBERS}
 
+    @property
+    def follow_domains(self) -> frozenset[str]:
+        """Return the protocol domains of the leaders the bridge of this client can follow."""
+        if (handler := self._follow_handler) is None:
+            return frozenset()
+        return handler.follow_domains
+
+    async def follow(self, player_id: str) -> None:
+        """
+        Start following what a player plays, through the bridge of this client.
+
+        :param player_id: The player to follow.
+        """
+        if (handler := self._follow_handler) is None:
+            raise PlayerCommandFailed(f"{self.display_name} can not follow another player")
+        handler.set_follow_delay(self._follow_delay_ms)
+        await handler.follow(player_id)
+
+    async def unfollow(self) -> None:
+        """Stop following, through the bridge of this client."""
+        if (handler := self._follow_handler) is not None:
+            await handler.unfollow()
+
+    async def get_config_entries(self) -> list[ConfigEntry]:
+        """Return all (provider/player specific) Config Entries for the player."""
+        entries = await super().get_config_entries()
+        if self.can_follow:
+            entries.append(
+                ConfigEntry(
+                    key=CONF_FOLLOW_DELAY_MS,
+                    type=ConfigEntryType.INTEGER,
+                    default_value=0,
+                    range=(-2000, 5000),
+                    immediate_apply=True,
+                    category="advanced",
+                )
+            )
+        return entries
+
+    async def on_config_updated(self) -> None:
+        """Apply a changed follow delay to the bridge of this client."""
+        await super().on_config_updated()
+        if (handler := self._follow_handler) is not None:
+            handler.set_follow_delay(self._follow_delay_ms)
+
     async def set_members(
         self,
         player_ids_to_add: list[str] | None = None,
@@ -3464,6 +3511,17 @@ class SendspinVisualizerPlayer(SendspinBasePlayer):
             )
             return
         await self.mass.players.cmd_play(groups[0].player_id)
+
+    @property
+    def _follow_delay_ms(self) -> int:
+        """Return the configured delay of the lights while following a player."""
+        value = self.config.get_value(CONF_FOLLOW_DELAY_MS, 0)
+        return int(float(str(value))) if value is not None else 0
+
+    @property
+    def _follow_handler(self) -> BridgeFollowHandler | None:
+        """Return the follow handler the bridge of this client registered, if any."""
+        return cast("SendspinProvider", self.provider).get_bridge_follow_handler(self.protocol_id)
 
 
 class SendspinSourcePlayer(SendspinBasePlayer):

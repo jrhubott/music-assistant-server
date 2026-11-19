@@ -15,6 +15,7 @@ from music_assistant_models.enums import PlaybackState, PlayerType
 from music_assistant_models.errors import (
     AlreadyRegisteredError,
     InsufficientPermissions,
+    PlayerCommandFailed,
     PlayerUnavailableError,
 )
 from music_assistant_models.player_control import PlayerControl  # noqa: TC002
@@ -85,6 +86,7 @@ class _PlayerControllerBase(CoreController):
     _member_power_ons: dict[asyncio.Future[list[bool]], tuple[str, frozenset[str]]]
     _power_on_waits: dict[str, _PowerOnWait]
     _power_cuts: dict[str, bool]
+    _follows: dict[str, str]
     _state_update_subscribers: list[Callable[[Player, dict[str, tuple[Any, Any]]], None]]
 
     def iter_players(
@@ -114,6 +116,22 @@ class _PlayerControllerBase(CoreController):
             if provider_filter is not None and player.provider_id != provider_filter:
                 continue
             yield player
+
+    def followed_player(self, player_id: str) -> str | None:
+        """
+        Return the id of the player a player follows, if it follows one.
+
+        :param player_id: Id of the (following) player.
+        """
+        return self._follows.get(player_id)
+
+    def followers_of(self, player_id: str) -> list[str]:
+        """
+        Return the ids of the players that follow a player, in the order they started to.
+
+        :param player_id: Id of the followed player.
+        """
+        return [follower for follower, leader in self._follows.items() if leader == player_id]
 
     def iter_protocols(self, provider_filter: str | None = None) -> Iterator[PlayerProtocol]:
         """
@@ -583,6 +601,25 @@ class _PlayerControllerBase(CoreController):
             )
         return player
 
+    def _refuse_follower(self, player: Player) -> None:
+        """
+        Refuse a playback command on a player that follows another one.
+
+        A follower renders nothing of its own: what it shows is what its leader plays, so a
+        command for its playback is no command for the leader either.
+
+        :param player: The player the command is for.
+        """
+        if (leader_id := self.followed_player(player.player_id)) is None:
+            return
+        leader = self.get_player(leader_id)
+        leader_name = leader.name if leader is not None else leader_id
+        msg = (
+            f"Player {player.name} follows {leader_name} and plays nothing itself: "
+            f"control {leader_name} instead"
+        )
+        raise PlayerCommandFailed(msg)
+
     def _get_player_with_redirect(self, player_id: str) -> Player:
         """Get player with check if playback related command should be redirected."""
         player = self.get_player(player_id, True)
@@ -871,6 +908,8 @@ class _PlayerControllerBase(CoreController):
             self, leader: Player, remaining_members: list[str]
         ) -> None: ...
         async def _release_group_session(self, group_id: str) -> None: ...
+        async def _follow(self, leader_id: str, follower_id: str) -> None: ...
+        async def _unfollow(self, follower_id: str) -> None: ...
         # sleep timer
         def _clear_sleep_timer(self, player: Player) -> None: ...
         @staticmethod

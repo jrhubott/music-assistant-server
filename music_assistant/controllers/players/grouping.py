@@ -22,8 +22,10 @@ from music_assistant_models.errors import (
 
 from music_assistant.constants import CONF_PLAYERS, CONF_PREFERRED_OUTPUT_PROTOCOL
 from music_assistant.controllers.players.grouping_plan import (
+    ChangeKind,
     Detach,
     Failure,
+    Follow,
     GroupChange,
     GroupCommand,
     GroupingSnapshot,
@@ -45,7 +47,9 @@ from music_assistant.controllers.players.grouping_plan import (
     ReleaseSession,
     SetMembers,
     TransferLeadership,
+    Unfollow,
     Ungroup,
+    followers_to_join,
     plan_group_change,
 )
 
@@ -135,13 +139,39 @@ async def apply_group_change(
         run.left_out = False
     if plan.regroup is not None:
         await _regroup(run, plan.regroup)
+        await _join_followers(players, plan.regroup.leader_id)
     elif plan.join is not None:
         try:
             await _join(run, plan.join, new_content=change.new_content)
         except BaseException:
             await run.abort_takeover()
             raise
+        await _join_followers(players, plan.join.target_id)
     return run.takeover
+
+
+async def _join_followers(players: _PlayerControllerBase, leader_id: str) -> None:
+    """
+    Turn the followers of a leader into members once its group plays over their protocol.
+
+    :param players: The players controller.
+    :param leader_id: The leader whose group changed.
+    """
+    if not players.followers_of(leader_id):
+        return
+    member_ids = followers_to_join(grouping_snapshot(players), leader_id)
+    if not member_ids:
+        return
+    players.logger.info(
+        "Followers %s of %s join its group, which now plays over their protocol",
+        ", ".join(member_ids),
+        leader_id,
+    )
+    for member_id in member_ids:
+        await players._unfollow(member_id)
+    await apply_group_change(
+        players, GroupChange(kind=ChangeKind.MEMBERS, target_id=leader_id, add=member_ids)
+    )
 
 
 async def route_group_change(players: _PlayerControllerBase, change: GroupChange) -> bool:
@@ -268,6 +298,14 @@ async def _regroup(run: _GroupRun, regroup: Regroup) -> None:
     if rules.active_output(rules.held_player(regroup.leader_id)) == regroup.protocol_id:
         run.clear_outputs([regroup.leader_id])
     await _join(run, Join(target_id=regroup.leader_id, add=regroup.member_ids), new_content=False)
+    if regroup.follower_ids:
+        run.players.logger.info(
+            "Players %s follow %s again, which plays over its own protocol",
+            ", ".join(regroup.follower_ids),
+            regroup.leader_id,
+        )
+    for member_id in regroup.follower_ids:
+        await run.players._follow(regroup.leader_id, member_id)
 
 
 class _GroupRun:
@@ -425,6 +463,10 @@ class _GroupRun:
                 await players._transfer_ad_hoc_leadership(
                     self.player(step.leader_id), list(step.remaining)
                 )
+            case Follow():
+                await players._follow(step.leader_id, step.member_id)
+            case Unfollow():
+                await players._unfollow(step.member_id)
             case Refuse():
                 raise self.error(step)
 
@@ -565,6 +607,9 @@ def _player_view(players: _PlayerControllerBase, player: Player) -> PlayerView:
             players.mass.config.get_player_value(player.player_id, CONF_PREFERRED_OUTPUT_PROTOCOL),
         ),
         active_queue=_queue_view(players.get_active_queue(player)),
+        follows=players.followed_player(player.player_id),
+        followers=tuple(players.followers_of(player.player_id)),
+        follow_domains=own.follow_domains if own is not None else frozenset(),
     )
 
 
