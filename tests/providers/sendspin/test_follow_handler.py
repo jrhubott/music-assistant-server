@@ -27,6 +27,7 @@ def _provider() -> SendspinProvider:
     client = SimpleNamespace(info=SimpleNamespace(player_support=None))
     provider = SimpleNamespace(
         instance_id="sendspin--test",
+        mass=SimpleNamespace(get_provider=Mock(return_value=None)),
         logger=Mock(),
         server_api=SimpleNamespace(get_client=Mock(return_value=client)),
         _bridge_follow_handlers={},
@@ -42,6 +43,7 @@ def visualizer(monkeypatch: pytest.MonkeyPatch) -> SendspinVisualizerPlayer:
 
     def _init_player(self: PlayerProtocol, provider: PlayerProvider, protocol_id: str) -> None:
         self._provider = provider
+        self.mass = provider.mass
         self._protocol_id = protocol_id
         self._player = None
         self._attr_can_group_with = set()
