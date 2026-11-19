@@ -8,8 +8,10 @@ to add songs to the queue with configurable rate limiting.
 from __future__ import annotations
 
 import asyncio
+import time
+import unicodedata
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 from mashumaro import DataClassDictMixin
@@ -88,6 +90,15 @@ CONF_PARTY_DURATION = "party_duration"
 CONF_HIDE_BACK_BUTTON = "hide_back_button"
 CONF_SHOW_PROGRESS_BAR = "show_progress_bar"
 CONF_PREVENT_DUPLICATE_TRACKS = "prevent_duplicate_tracks"
+# Guest identity and interaction
+CONF_ENABLE_GUEST_NAMES = "enable_guest_names"
+CONF_ENABLE_SHOUT_OUTS = "enable_shout_outs"
+CONF_ENABLE_REACTIONS = "enable_reactions"
+# Party screen extras
+CONF_SHOW_LEADERBOARD = "show_leaderboard"
+CONF_SHOW_SKIP_METER = "show_skip_meter"
+CONF_SHOW_REQUEST_ANIMATIONS = "show_request_animations"
+CONF_SHOW_TIPS = "show_tips"
 
 ACTION_CREATE_KIOSK_LINK = "create_kiosk_link"
 ACTION_REPLACE_KIOSK_LINK = "replace_kiosk_link"
@@ -123,8 +134,37 @@ ATTR_PARTY_BOOSTED = "party_boosted"
 ATTR_PARTY_SKIP_VOTES = "party_skip_votes"
 # The voters' ids, comma joined, as extra_attributes only hold scalar values
 ATTR_PARTY_SKIP_VOTERS = "party_skip_voters"
+ATTR_PARTY_GUEST_NAME = "party_guest_name"
+ATTR_PARTY_MESSAGE = "party_message"
+
+MAX_GUEST_NAME_LENGTH = 24
+MAX_SHOUT_OUT_LENGTH = 80
+LEADERBOARD_SIZE = 5
+# Reactions a guest can send to the party screen
+REACTIONS = ("🔥", "❤️", "😂", "🙌", "🎉", "💃")
+# Minimum seconds between two reactions of the same guest
+REACTION_MIN_INTERVAL = 0.5
 
 SUPPORTED_FEATURES: set[ProviderFeature] = set()
+
+
+@dataclass
+class GuestStats:
+    """What one guest did at the party, for the leaderboard."""
+
+    name: str
+    requests: int = 0
+    boosts: int = 0
+
+
+@dataclass
+class LeaderboardEntry(DataClassDictMixin):
+    """One guest on the party leaderboard."""
+
+    name: str
+    requests: int
+    boosts: int
+    score: int
 
 
 @dataclass
@@ -166,6 +206,16 @@ class PartyConfig(DataClassDictMixin):
     # Shared playback mode: "venue" (a real player plays out loud) or "remote"
     # (silent disco; every guest device is its own receiver). Drives the listen-in default.
     mode: str
+    # Guest identity and interaction
+    enable_guest_names: bool = False
+    enable_shout_outs: bool = False
+    enable_reactions: bool = False
+    reactions: list[str] = field(default_factory=list)
+    # Party screen extras
+    show_leaderboard: bool = False
+    show_skip_meter: bool = False
+    show_request_animations: bool = False
+    show_tips: bool = False
 
 
 async def setup(
@@ -400,6 +450,57 @@ class PartyPlugin(PluginProvider):
                 advanced=True,
                 category="guest_features",
             ),
+            # Guest identity and interaction
+            ConfigEntry(
+                key=CONF_ENABLE_GUEST_NAMES,
+                type=ConfigEntryType.BOOLEAN,
+                default_value=True,
+                depends_on=CONF_ENABLE_GUEST_ACCESS,
+                category="guest_features",
+            ),
+            ConfigEntry(
+                key=CONF_ENABLE_SHOUT_OUTS,
+                type=ConfigEntryType.BOOLEAN,
+                default_value=True,
+                depends_on=CONF_ENABLE_ADD_QUEUE,
+                category="guest_features",
+            ),
+            ConfigEntry(
+                key=CONF_ENABLE_REACTIONS,
+                type=ConfigEntryType.BOOLEAN,
+                default_value=True,
+                depends_on=CONF_ENABLE_GUEST_ACCESS,
+                category="guest_features",
+            ),
+            # Party screen extras
+            ConfigEntry(
+                key=CONF_SHOW_LEADERBOARD,
+                type=ConfigEntryType.BOOLEAN,
+                default_value=True,
+                depends_on=CONF_ENABLE_GUEST_NAMES,
+                category="party_screen",
+            ),
+            ConfigEntry(
+                key=CONF_SHOW_SKIP_METER,
+                type=ConfigEntryType.BOOLEAN,
+                default_value=True,
+                depends_on=CONF_ENABLE_SKIP_SONG,
+                category="party_screen",
+            ),
+            ConfigEntry(
+                key=CONF_SHOW_REQUEST_ANIMATIONS,
+                type=ConfigEntryType.BOOLEAN,
+                default_value=True,
+                depends_on=CONF_ENABLE_GUEST_ACCESS,
+                category="party_screen",
+            ),
+            ConfigEntry(
+                key=CONF_SHOW_TIPS,
+                type=ConfigEntryType.BOOLEAN,
+                default_value=True,
+                depends_on=CONF_ENABLE_GUEST_ACCESS,
+                category="party_screen",
+            ),
             # Badge color configuration
             ConfigEntry(
                 key=CONF_REQUEST_BADGE_COLOR,
@@ -454,6 +555,9 @@ class PartyPlugin(PluginProvider):
         self._queue_lock = asyncio.Lock()
         self._session: SharedPlaybackSession | None = None
         self._session_lock = asyncio.Lock()
+        # Leaderboard stats per guest, kept for as long as the provider is loaded
+        self._guest_stats: dict[str, GuestStats] = {}
+        self._last_reaction: dict[str, float] = {}
 
     async def loaded_in_mass(self) -> None:
         """Call after the provider has been loaded."""
@@ -489,6 +593,16 @@ class PartyPlugin(PluginProvider):
         self._unregister_handles.append(
             self.mass.register_api_command(
                 "party/skip", self.skip_current, required_scope=Scope.QUEUES_CONTROL
+            )
+        )
+        self._unregister_handles.append(
+            self.mass.register_api_command(
+                "party/react", self.react, required_scope=Scope.QUEUES_CONTROL
+            )
+        )
+        self._unregister_handles.append(
+            self.mass.register_api_command(
+                "party/leaderboard", self.get_leaderboard, required_scope=Scope.PROVIDERS_READ
             )
         )
         self._unregister_handles.append(
@@ -658,14 +772,60 @@ class PartyPlugin(PluginProvider):
                 "bool", self.config.get_value(CONF_PREVENT_DUPLICATE_TRACKS)
             ),
             mode=cast("str", self.config.get_value(CONF_PARTY_MODE)),
+            enable_guest_names=self._guest_names_enabled(),
+            enable_shout_outs=self._shout_outs_enabled(),
+            enable_reactions=self._reactions_enabled(),
+            reactions=list(REACTIONS),
+            show_leaderboard=self._guest_names_enabled()
+            and bool(self.config.get_value(CONF_SHOW_LEADERBOARD)),
+            show_skip_meter=bool(self.config.get_value(CONF_ENABLE_SKIP_SONG))
+            and bool(self.config.get_value(CONF_SHOW_SKIP_METER)),
+            show_request_animations=bool(self.config.get_value(CONF_SHOW_REQUEST_ANIMATIONS)),
+            show_tips=bool(self.config.get_value(CONF_SHOW_TIPS)),
         )
 
+    async def get_leaderboard(self) -> list[LeaderboardEntry]:
+        """
+        Get the guests that requested and boosted the most songs at this party.
+
+        :returns: The top guests, best first. Empty when guest names are disabled.
+        """
+        if not self._guest_names_enabled():
+            return []
+        return self._build_leaderboard()
+
     # ==================== Guest Action API Commands ====================
+
+    async def react(self, emoji: str) -> dict[str, Any]:
+        """
+        Send a reaction to the party screen, where it floats up for everyone to see.
+
+        Reactions sent faster than a guest could tap are dropped.
+
+        :param emoji: One of the reactions listed in the party config.
+        :returns: Result dict with success status and whether the reaction was shown.
+        """
+        if not self.config.get_value(CONF_ENABLE_GUEST_ACCESS):
+            raise InvalidDataError("Party guest access is disabled")
+        if not self._reactions_enabled():
+            raise InvalidDataError("Reactions are disabled")
+        if emoji not in REACTIONS:
+            raise InvalidDataError(f"Unknown reaction: {emoji}")
+
+        voter_id = await self._get_voter_id()
+        now = time.monotonic()
+        if now - self._last_reaction.get(voter_id, 0.0) < REACTION_MIN_INTERVAL:
+            return {"success": True, "shown": False}
+        self._last_reaction[voter_id] = now
+        self.signal_provider_event({"event": "reaction", "emoji": emoji})
+        return {"success": True, "shown": True}
 
     async def add_to_queue(
         self,
         uri: str,
         boost: bool = False,
+        guest_name: str | None = None,
+        message: str | None = None,
     ) -> dict[str, Any]:
         """
         Add a media item to the party queue.
@@ -675,6 +835,10 @@ class PartyPlugin(PluginProvider):
 
         :param uri: The URI of the media item to add (e.g., "spotify://track/xxx").
         :param boost: If True, insert at the front of the guest section (play next).
+        :param guest_name: Nickname of the guest, shown on the party screen.
+            Ignored when guest names are disabled.
+        :param message: Short shout-out shown on the party screen while the song plays.
+            Ignored when shout-outs are disabled.
         :returns: Result dict with success status and queue position info.
         """
         # Check if guest access is enabled
@@ -698,13 +862,18 @@ class PartyPlugin(PluginProvider):
 
         # Handle different scenarios based on queue state and boost mode
         started_playback = False
+        extra_attrs: dict[str, Any] = {ATTR_PARTY_GUEST: True}
+        if boost:
+            extra_attrs[ATTR_PARTY_BOOSTED] = True
+        if name := self._guest_name(guest_name):
+            extra_attrs[ATTR_PARTY_GUEST_NAME] = name
+        shout_out = self._clean_text(message, MAX_SHOUT_OUT_LENGTH)
+        if shout_out and self._shout_outs_enabled():
+            extra_attrs[ATTR_PARTY_MESSAGE] = shout_out
 
         if queue.state == PlaybackState.PLAYING:
             # Queue is actively playing — insert into the priority section
-            extra_attrs: dict[str, Any] = {ATTR_PARTY_GUEST: True}
-            if boost:
-                extra_attrs[ATTR_PARTY_BOOSTED] = True
-            await self._add_to_priority_section(queue_id, uri, extra_attrs)
+            queue_item = await self._add_to_priority_section(queue_id, uri, extra_attrs)
         else:
             # Queue is not playing — resolve the item, insert, and start playback.
             # Hold the lock so concurrent guests don't both start playback.
@@ -720,9 +889,7 @@ class PartyPlugin(PluginProvider):
                 ):
                     raise InvalidDataError(f"Cannot add {uri} to queue - not a playable item")
                 queue_item = build_queue_item(queue_id, media_item)  # type: ignore[arg-type]
-                queue_item.extra_attributes[ATTR_PARTY_GUEST] = True
-                if boost:
-                    queue_item.extra_attributes[ATTR_PARTY_BOOSTED] = True
+                queue_item.extra_attributes.update(extra_attrs)
                 # Insert after current position if queue has one, otherwise at the start
                 insert_index = (queue.current_index + 1) if queue.current_index is not None else 0
                 await self.mass.player_queues.load(
@@ -736,6 +903,7 @@ class PartyPlugin(PluginProvider):
                 await self.mass.player_queues.play_index(queue_id, insert_index)
                 started_playback = True
 
+        await self._announce_guest_request(queue_item, name, boosted=boost, new_request=True)
         self.logger.info(
             "Guest added to queue: %s (boost=%s, started_playback=%s)",
             uri,
@@ -750,7 +918,9 @@ class PartyPlugin(PluginProvider):
             "started_playback": started_playback,
         }
 
-    async def boost_queue_item(self, queue_item_id: str) -> dict[str, Any]:
+    async def boost_queue_item(
+        self, queue_item_id: str, guest_name: str | None = None
+    ) -> dict[str, Any]:
         """
         Boost an existing queue item by moving it to the boosted section.
 
@@ -758,6 +928,8 @@ class PartyPlugin(PluginProvider):
         end of the boosted priority section (right after the currently playing track).
 
         :param queue_item_id: The queue_item_id of the item to boost.
+        :param guest_name: Nickname of the guest that boosts. It is shown on the party
+            screen when the item has no requester yet. Ignored when guest names are disabled.
         :returns: Result dict with success status.
         """
         if not self.config.get_value(CONF_ENABLE_GUEST_ACCESS):
@@ -774,6 +946,7 @@ class PartyPlugin(PluginProvider):
             raise InvalidDataError(f"Queue not found: {queue_id}")
 
         started_playback = False
+        name = self._guest_name(guest_name)
 
         async with self._queue_lock:
             queue_items = self.mass.player_queues.items(queue_id)
@@ -808,8 +981,7 @@ class PartyPlugin(PluginProvider):
 
                 queue_items_copy = queue_items.copy()
                 moved_item = queue_items_copy.pop(item_index)
-                moved_item.extra_attributes[ATTR_PARTY_GUEST] = True
-                moved_item.extra_attributes[ATTR_PARTY_BOOSTED] = True
+                self._mark_boosted(moved_item, name)
 
                 # Adjust insert index if the item was before the insert position
                 if item_index < insert_index:
@@ -824,8 +996,7 @@ class PartyPlugin(PluginProvider):
 
                 queue_items_copy = queue_items.copy()
                 moved_item = queue_items_copy.pop(item_index)
-                moved_item.extra_attributes[ATTR_PARTY_GUEST] = True
-                moved_item.extra_attributes[ATTR_PARTY_BOOSTED] = True
+                self._mark_boosted(moved_item, name)
 
                 # Adjust play_index if the item was before it
                 if item_index < play_index:
@@ -836,6 +1007,7 @@ class PartyPlugin(PluginProvider):
                 await self.mass.player_queues.play_index(queue_id, play_index)
                 started_playback = True
 
+        await self._announce_guest_request(moved_item, name, boosted=True, new_request=False)
         self.logger.info(
             "Guest boosted queue item: %s (started_playback=%s)",
             queue_item_id,
@@ -850,7 +1022,7 @@ class PartyPlugin(PluginProvider):
 
     async def _add_to_priority_section(
         self, queue_id: str, uri: str, extra_attributes: dict[str, Any]
-    ) -> None:
+    ) -> QueueItem:
         """
         Add a media item to the end of a priority section in the queue.
 
@@ -860,6 +1032,7 @@ class PartyPlugin(PluginProvider):
         :param queue_id: The queue ID to add to.
         :param uri: The URI of the media item to add.
         :param extra_attributes: Attributes to set on the queue item (e.g., guest/boosted flags).
+        :returns: The queue item that was added.
         """
         # Resolve the media item from URI
         media_item = await self.mass.music.get_item_by_uri(uri)
@@ -910,6 +1083,7 @@ class PartyPlugin(PluginProvider):
                 keep_played=True,
                 shuffle=False,
             )
+        return queue_item
 
     @staticmethod
     def _queue_contains_uri(queue_items: list[QueueItem], uri: str) -> bool:
@@ -1183,6 +1357,132 @@ class PartyPlugin(PluginProvider):
         """
         voters = queue_item.extra_attributes.get(ATTR_PARTY_SKIP_VOTERS)
         return str(voters).split(",") if voters else []
+
+    def _guest_names_enabled(self) -> bool:
+        """Return whether guests can show their nickname on the party screen."""
+        return bool(self.config.get_value(CONF_ENABLE_GUEST_ACCESS)) and bool(
+            self.config.get_value(CONF_ENABLE_GUEST_NAMES)
+        )
+
+    def _guest_name(self, guest_name: str | None) -> str | None:
+        """
+        Return the nickname to show for a guest, or None when there is none to show.
+
+        :param guest_name: The nickname as the guest entered it.
+        """
+        name = self._clean_text(guest_name, MAX_GUEST_NAME_LENGTH)
+        return name if name and self._guest_names_enabled() else None
+
+    def _shout_outs_enabled(self) -> bool:
+        """Return whether guests can attach a shout-out to a request."""
+        return (
+            bool(self.config.get_value(CONF_ENABLE_GUEST_ACCESS))
+            and bool(self.config.get_value(CONF_ENABLE_ADD_QUEUE))
+            and bool(self.config.get_value(CONF_ENABLE_SHOUT_OUTS))
+        )
+
+    def _reactions_enabled(self) -> bool:
+        """Return whether guests can send reactions to the party screen."""
+        return bool(self.config.get_value(CONF_ENABLE_GUEST_ACCESS)) and bool(
+            self.config.get_value(CONF_ENABLE_REACTIONS)
+        )
+
+    @staticmethod
+    def _clean_text(value: str | None, max_length: int) -> str | None:
+        """
+        Return guest-entered text fit for the party screen, or None when nothing is left.
+
+        :param value: The text as the guest entered it.
+        :param max_length: The maximum number of characters to keep.
+        """
+        if not value:
+            return None
+        # drop control and format characters (newlines, direction overrides) and
+        # collapse whitespace, so a guest can't break the layout of the screen
+        visible = "".join(
+            " " if char.isspace() else char
+            for char in str(value)
+            if char.isspace() or unicodedata.category(char)[0] != "C"
+        )
+        cleaned = " ".join(visible.split())[:max_length].strip()
+        return cleaned or None
+
+    @staticmethod
+    def _mark_boosted(queue_item: QueueItem, guest_name: str | None) -> None:
+        """
+        Mark a queue item as a boosted guest request.
+
+        :param queue_item: The queue item that is boosted.
+        :param guest_name: Nickname of the guest that boosts, used when the item has
+            no requester yet.
+        """
+        queue_item.extra_attributes[ATTR_PARTY_GUEST] = True
+        queue_item.extra_attributes[ATTR_PARTY_BOOSTED] = True
+        if guest_name and not queue_item.extra_attributes.get(ATTR_PARTY_GUEST_NAME):
+            queue_item.extra_attributes[ATTR_PARTY_GUEST_NAME] = guest_name
+
+    async def _announce_guest_request(
+        self, queue_item: QueueItem, guest_name: str | None, boosted: bool, new_request: bool
+    ) -> None:
+        """
+        Tell the party screen that a guest requested or boosted a song, and count it.
+
+        :param queue_item: The queue item that was requested or boosted.
+        :param guest_name: Nickname of the guest, None when the guest has none.
+        :param boosted: Whether the song was boosted.
+        :param new_request: Whether the guest added the song, rather than boosting a
+            song that was already in the queue.
+        """
+        self.signal_provider_event(
+            {
+                "event": "guest_request",
+                "queue_item_id": queue_item.queue_item_id,
+                "title": queue_item.name,
+                "name": guest_name,
+                "boosted": boosted,
+            }
+        )
+        await self._record_guest_action(guest_name, requests=int(new_request), boosts=int(boosted))
+
+    async def _record_guest_action(
+        self, guest_name: str | None, requests: int = 0, boosts: int = 0
+    ) -> None:
+        """
+        Count a request or boost towards the leaderboard and tell the party screen.
+
+        Guests without a nickname are not on the leaderboard.
+
+        :param guest_name: Nickname of the guest, None when the guest has none.
+        :param requests: Number of songs the guest requested.
+        :param boosts: Number of songs the guest boosted.
+        """
+        if not guest_name:
+            return
+        voter_id = await self._get_voter_id()
+        stats = self._guest_stats.setdefault(voter_id, GuestStats(name=guest_name))
+        stats.name = guest_name
+        stats.requests += requests
+        stats.boosts += boosts
+        self.signal_provider_event(
+            {
+                "event": "leaderboard_updated",
+                "leaderboard": [entry.to_dict() for entry in self._build_leaderboard()],
+            }
+        )
+
+    def _build_leaderboard(self) -> list[LeaderboardEntry]:
+        """Return the top guests, best first."""
+        entries = [
+            LeaderboardEntry(
+                name=stats.name,
+                requests=stats.requests,
+                boosts=stats.boosts,
+                score=stats.requests + stats.boosts,
+            )
+            for stats in self._guest_stats.values()
+        ]
+        entries.sort(key=lambda entry: (-entry.score, -entry.requests, entry.name.lower()))
+        return entries[:LEADERBOARD_SIZE]
 
     async def _revoke_guest_tokens(self) -> None:
         """

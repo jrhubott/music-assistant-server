@@ -130,12 +130,41 @@
     },
     "revoke_kiosk_link": {
       "label": "Revoke TV link"
+    },
+    "enable_guest_names": {
+      "label": "Ask Guests for a Nickname",
+      "description": "Ask guests for a nickname when they join. Their nickname is shown on the party screen with the songs they request (\"Requested by Sam\") and on the leaderboard."
+    },
+    "enable_shout_outs": {
+      "label": "Allow Shout-outs",
+      "description": "Let guests add a short message to a song they request (\"for Mike's birthday\"). It is shown on the party screen while that song plays."
+    },
+    "enable_reactions": {
+      "label": "Allow Reactions",
+      "description": "Let guests send emoji reactions from their phone. Reactions float up the party screen."
+    },
+    "show_leaderboard": {
+      "label": "Show DJ Leaderboard",
+      "description": "Now and then show the guests that requested and boosted the most songs on the party screen. Needs guest nicknames."
+    },
+    "show_skip_meter": {
+      "label": "Show Skip Vote Meter",
+      "description": "Show how many skip votes the current song has, and how many it needs, as a bar on the party screen."
+    },
+    "show_request_animations": {
+      "label": "Animate New Requests",
+      "description": "Show a short animation on the party screen when a guest requests or boosts a song."
+    },
+    "show_tips": {
+      "label": "Show Tips for Guests",
+      "description": "Show rotating tips on the party screen that explain how guests can join, request, boost, skip and react."
     }
   },
   "config_categories": {
     "guest_features": "Guest Features",
     "karaoke": "Karaoke",
-    "tv_link": "TV link"
+    "tv_link": "TV link",
+    "party_screen": "Party Screen"
   },
   "manifest": {
     "description": "Enable guest access with a shareable URL for party, allowing guests to add songs to the queue with rate limiting."
