@@ -77,10 +77,22 @@ def sonos_zones_differ(player_a: Player, player_b: Player) -> bool:
     :param player_a: The first player.
     :param player_b: The second player.
     """
+    return sonos_uuids_differ(
+        player_a.device_info.identifiers.get(IdentifierType.UUID) or "",
+        player_b.device_info.identifiers.get(IdentifierType.UUID) or "",
+    )
+
+
+def sonos_uuids_differ(uuid_a: str, uuid_b: str) -> bool:
+    """
+    Return whether two Sonos UUIDs belong to different zones of one Sonos chassis.
+
+    :param uuid_a: The first UUID, or the UDN of a Sonos renderer.
+    :param uuid_b: The second UUID, or the UDN of a Sonos renderer.
+    """
     ports = []
-    for player in (player_a, player_b):
-        uuid_value = player.device_info.identifiers.get(IdentifierType.UUID) or ""
-        if not (match := SONOS_UUID_PATTERN.fullmatch(uuid_value)):
+    for uuid_value in (uuid_a, uuid_b):
+        if not (match := SONOS_UUID_PATTERN.fullmatch(uuid_value.removeprefix("uuid:"))):
             return False
         ports.append(match["port"])
     return ports[0] != ports[1]
@@ -1707,6 +1719,18 @@ class ProtocolLinkingMixin:
             if owner_id is None:
                 owner_id = self._get_cached_protocol_parent_id(protocol_id)
             if owner_id is not None and owner_id != native_player.player_id:
+                continue
+            # a link to another Sonos zone that an earlier version stored is not recovered,
+            # also while the renderer still waits for this player to register
+            protocol_uuid = (
+                protocol_player.device_info.identifiers.get(IdentifierType.UUID)
+                if protocol_player
+                else None
+            ) or protocol_id
+            if sonos_uuids_differ(
+                native_player.device_info.identifiers.get(IdentifierType.UUID) or "",
+                protocol_uuid,
+            ):
                 continue
 
             # Get protocol player config to determine the protocol domain

@@ -12699,3 +12699,41 @@ class TestSonosZones:
 
         assert renderer.protocol_parent_id is None
         assert speaker.linked_output_protocols == []
+
+    def test_stored_link_to_other_zone_is_dropped_when_it_is_back_first(
+        self, mock_mass: MagicMock
+    ) -> None:
+        """A headphone zone renderer back before the speaker waits, then stays off it."""
+        controller = PlayerController(mock_mass)
+        speaker = self._speaker(mock_mass)
+        renderer = self._renderer(mock_mass, "01500")
+        store: dict[str, Any] = {
+            CONF_PLAYERS: {
+                renderer.player_id: {
+                    "provider": "dlna--x",
+                    "player_type": "protocol",
+                    "values": {CONF_PROTOCOL_PARENT_ID: speaker.player_id},
+                },
+                speaker.player_id: {
+                    "provider": "sonos--y",
+                    "player_type": "player",
+                    "values": {"linked_protocol_ids": [renderer.player_id]},
+                },
+            }
+        }
+        _wire_nested_config(mock_mass, store)
+        controller._players = {renderer.player_id: renderer}
+
+        with patch.object(controller, "_schedule_protocol_evaluation") as schedule:
+            controller._try_link_protocol_to_native(renderer)
+            assert renderer.protocol_parent_id is None
+            schedule.assert_called_once_with(renderer)
+
+            # the speaker registers, then the renderer's delayed evaluation runs
+            controller._players[speaker.player_id] = speaker
+            controller._evaluate_protocol_links(speaker)
+            controller._try_link_protocol_to_native(renderer)
+
+        assert renderer.protocol_parent_id is None
+        assert speaker.linked_output_protocols == []
+        assert speaker.player_id == self.SPEAKER_UUID
