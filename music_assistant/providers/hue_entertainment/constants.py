@@ -16,6 +16,7 @@ CONF_CLIENTKEY: Final[str] = "hue_clientkey"
 CONF_BRIGHTNESS: Final[str] = "brightness"
 CONF_COLOR_MODE: Final[str] = "color_mode"
 CONF_HUE_LATENCY_MS: Final[str] = "hue_latency_ms"
+CONF_FOLLOW_SPEAKERS: Final[str] = "follow_speakers"
 
 # Where the lights are streamed to; an instance without a stored backend uses the Hue bridge.
 BACKEND_HUE_BRIDGE: Final[str] = "hue_bridge"
@@ -29,6 +30,11 @@ DEFAULT_COLOR_MODE: Final[str] = COLOR_MODES[0]
 DEFAULT_BRIGHTNESS: Final[int] = 100
 
 DEFAULT_HUE_LATENCY_MS: Final[int] = 20
+
+# Off: a light grouped with any speaker joins it over Sendspin. On: it follows a speaker that
+# plays over one of these protocols instead, and the speaker keeps its own protocol.
+DEFAULT_FOLLOW_SPEAKERS: Final[bool] = False
+FOLLOW_DOMAINS: Final[frozenset[str]] = frozenset({"sonos"})
 
 HUE_MDNS_TYPE: Final[str] = "_hue._tcp.local."
 

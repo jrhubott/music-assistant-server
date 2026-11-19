@@ -34,13 +34,14 @@ from music_assistant.providers.sendspin.bridge_role import (
 
 from .analyzer import HueAudioAnalyzer
 from .constants import (
+    FOLLOW_DOMAINS,
     SPECTRUM_BINS,
     SPECTRUM_F_MAX,
     SPECTRUM_F_MIN,
     SPECTRUM_SCALE,
 )
 from .follow import FollowSession
-from .settings import get_brightness, get_color_mode, get_hue_latency_ms
+from .settings import get_brightness, get_color_mode, get_follow_speakers, get_hue_latency_ms
 from .targets import TargetUnavailableError
 
 if TYPE_CHECKING:
@@ -110,6 +111,11 @@ class HueEntertainmentBridge:
         self._sendspin_prov: SendspinProvider | None = None
 
     @property
+    def follow_domains(self) -> frozenset[str]:
+        """Return the protocol domains of the speakers the lights can follow."""
+        return FOLLOW_DOMAINS
+
+    @property
     def follow_session(self) -> FollowSession | None:
         """Return the session following a player, None while no player is followed."""
         return self._follow_session
@@ -129,9 +135,10 @@ class HueEntertainmentBridge:
         sendspin_prov: SendspinProvider | None = self.mass.get_provider("sendspin")  # type: ignore[assignment]
         if sendspin_prov:
             sendspin_prov.register_bridge_player_type(client_id, PlayerType.LIGHT)
-            # the light player can follow a speaker that plays over another protocol
-            sendspin_prov.register_bridge_follow_handler(client_id, self)
             self._sendspin_prov = sendspin_prov
+            if get_follow_speakers(self.provider.config):
+                # the light player can follow a speaker that plays over another protocol
+                sendspin_prov.register_bridge_follow_handler(client_id, self)
 
         # Beat + small bundle of periodic features. Each periodic frame
         # is ~20-30 bytes; one second's worth fits comfortably under
@@ -198,6 +205,7 @@ class HueEntertainmentBridge:
 
     async def stop(self) -> None:
         """Stop the bridge."""
+        await self._release_follower()
         if self._follow_session is not None:
             await self._follow_session.stop()
             self._follow_session = None
@@ -321,6 +329,22 @@ class HueEntertainmentBridge:
         }
         if update:
             self._analyzer.apply_color_palette(update)
+
+    async def _release_follower(self) -> None:
+        """Take the light out of the group of the speaker it follows, if it follows one."""
+        if self._sendspin_prov is None or self._follow_session is None:
+            return
+        protocol = self._sendspin_prov.get_protocol(self.target.client_id)
+        if protocol is None or (player := protocol.player) is None:
+            return
+        if self.mass.players.followed_player(player.player_id) is None:
+            return
+        try:
+            await self.mass.players.cmd_ungroup(player.player_id)
+        except Exception as err:
+            self.logger.warning(
+                "Could not release '%s' from its speaker: %s", self.target.name, err
+            )
 
     async def _start_entertainment(self) -> None:
         """Open the target's stream, with retry."""

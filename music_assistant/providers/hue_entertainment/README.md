@@ -75,6 +75,7 @@ hue_entertainment/
 ├── setup_flow.py              Backend choice, bridge pairing, ZHA lamp choice
 ├── provider.py                mDNS discovery, lifecycle management
 ├── bridge.py                  Sendspin visualizer client → analyzer → LightTarget
+├── follow.py                  Follows a Sonos speaker's buffered audio (follow_speakers)
 ├── targets.py                 Hue bridge area and ZHA lamp targets
 ├── zigbee.py                  ZHA lookups through the Home Assistant plugin
 ├── analyzer.py                Bass beat detection, color cycling, effect modes
@@ -95,6 +96,7 @@ The setup flow asks for the backend (`backend`: `hue_bridge` or `zha`), then pai
 | `brightness` | Integer | 100 | Overall light brightness (0-100) |
 | `color_mode` | String | smooth | Visualization mode (smooth / ambient / flashing / energetic) |
 | `hue_latency_ms` | Integer | 20 | Lead time lights render ahead of the playhead (0-3000) |
+| `follow_speakers` | Boolean | off | Off: grouping a light with any speaker moves the group onto Sendspin. On: a light grouped with a Sonos speaker follows its audio (`follow.py`) and the speaker keeps its native Sonos protocol; other speakers still move onto Sendspin. Changing it reloads the plugin, which takes a light that follows out of its group. See "Followers" in `controllers/players/README.md` |
 
 ## Quick Setup
 

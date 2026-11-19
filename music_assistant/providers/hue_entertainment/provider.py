@@ -28,12 +28,14 @@ from .constants import (
     CONF_BRIDGE_ID,
     CONF_BRIGHTNESS,
     CONF_COLOR_MODE,
+    CONF_FOLLOW_SPEAKERS,
     CONF_HUE_LATENCY_MS,
     CONF_USERNAME,
     CONF_ZIGBEE_LIGHTS,
     CONF_ZIGBEE_NAME,
     DEFAULT_BRIGHTNESS,
     DEFAULT_COLOR_MODE,
+    DEFAULT_FOLLOW_SPEAKERS,
     DEFAULT_HUE_LATENCY_MS,
 )
 from .settings import get_brightness, get_color_mode, get_hue_latency_ms
@@ -93,6 +95,12 @@ class HueEntertainmentProvider(PluginProvider):
                 default_value=DEFAULT_HUE_LATENCY_MS,
                 range=(0, 3000),
                 immediate_apply=True,
+                category="settings",
+            ),
+            ConfigEntry(
+                key=CONF_FOLLOW_SPEAKERS,
+                type=ConfigEntryType.BOOLEAN,
+                default_value=DEFAULT_FOLLOW_SPEAKERS,
                 category="settings",
             ),
         )

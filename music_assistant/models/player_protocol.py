@@ -610,16 +610,23 @@ class PlayerProtocol(ABC):
         return False
 
     @property
-    def can_follow(self) -> bool:
+    def follow_domains(self) -> frozenset[str]:
         """
-        Return whether this player can follow another player instead of joining its group.
+        Return the protocol domains of the leaders this player can follow.
 
         A player that renders no audio itself (a light, a visualizer) and can take what a
-        leader plays from the leader's own buffered audio follows it: the leader keeps playing
-        over its own protocol, and this player is shown as a member of its group. A follower
-        implements :meth:`follow` and :meth:`unfollow`.
+        leader plays from the leader's own buffered audio follows a leader that plays over
+        one of these protocols (e.g. "sonos"): the leader keeps playing over its own protocol,
+        and this player is shown as a member of its group. Grouped with any other leader it
+        joins a protocol group as usual. A follower implements :meth:`follow` and
+        :meth:`unfollow`.
         """
-        return False
+        return frozenset()
+
+    @property
+    def can_follow(self) -> bool:
+        """Return whether this player can follow a leader on any protocol."""
+        return bool(self.follow_domains)
 
     def is_native_group_compatible(self, other: PlayerProtocol) -> bool:
         """

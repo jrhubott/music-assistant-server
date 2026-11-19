@@ -55,6 +55,10 @@ class BridgeFollowHandler(Protocol):
     taking what it plays from the leader's buffered audio instead of a Sendspin group.
     """
 
+    @property
+    def follow_domains(self) -> frozenset[str]:
+        """Return the protocol domains of the leaders the bridge can follow."""
+
     async def follow(self, player_id: str) -> None:
         """
         Start following what a player plays.

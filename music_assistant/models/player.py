@@ -2532,6 +2532,8 @@ class Player:
         for follower_id in followers:
             self._collect_peer(peers, follower_id, as_member=True, by_player_id=True)
         followable: set[str] = set()
+        own = self.own_protocol
+        own_domain = own.provider.domain if own is not None else None
         # only a player that renders audio itself has something to follow
         if can_lead and follows is None and self.reported_type in FOLLOWABLE_LEADER_TYPES:
             for protocol in players.iter_protocols():
@@ -2539,7 +2541,7 @@ class Player:
                 if (
                     candidate is None
                     or candidate is self
-                    or not protocol.can_follow
+                    or own_domain not in protocol.follow_domains
                     or candidate.own_protocol is not protocol
                     or players.followed_player(candidate.player_id) is not None
                 ):

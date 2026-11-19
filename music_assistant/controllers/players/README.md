@@ -781,8 +781,10 @@ already plays from the buffer of its queue item, timed to the leader's reported 
 
 - **Who follows.** The planner (`_divert_followers` in `_Planner._members`) takes a member out of
   the protocol join and plans `Follow(leader_id, member_id)` when the member is not a playback
-  target, its own protocol reports `can_follow`, the leader is a player or a stereo pair, and the
-  leader does not already play over the member's protocol domain. A leader that already plays over
+  target, the leader is a player or a stereo pair, and the protocol domain the leader plays over
+  (its active output, else its own protocol) is one the member's own protocol lists in
+  `follow_domains` and not the member's own. A leader on any other protocol takes the light into
+  a protocol group like any other member. A leader that already plays over
   Sendspin takes the light into that group like any other member.
 - **What leaves.** Removing or ungrouping a follower plans `Unfollow(member_id)`, as do the release
   of a follower before it joins elsewhere and the detach of a follower. Removing a player, and the
@@ -792,12 +794,15 @@ already plays from the buffer of its queue item, timed to the leader's reported 
   `followed_player` and `followers_of` read it.
 - **State.** `StateInputs.followers` adds the followers to the leader's `group_members`, after its
   protocol members; `StateInputs.follows` makes the follower read as synced to its leader. A leader
-  lists the players that can follow it (`followable`) in `can_group_with` without a common
-  protocol, and leaves its followers out of group volume. The follower names its leader in
+  lists the players that can follow its own protocol (`followable`) in `can_group_with` without a
+  common protocol, and leaves its followers out of group volume. The follower names its leader in
   `extra_attributes["follows"]` (`ATTR_FOLLOWS`), so a client can tell it from a protocol member.
-- **Provider side.** A protocol that can follow reports `can_follow` and implements `follow` and
+- **Provider side.** A protocol that can follow lists the leader domains it follows in
+  `follow_domains` (`can_follow` is true while that is not empty) and implements `follow` and
   `unfollow`. For Sendspin, a bridge registers a `BridgeFollowHandler` for its client
-  (`register_bridge_follow_handler`), and `SendspinVisualizerPlayer` hands the calls to it. A sync
+  (`register_bridge_follow_handler`), and `SendspinVisualizerPlayer` takes `follow_domains` from
+  it and hands the calls to it. The Hue bridge registers one only while its provider's
+  `follow_speakers` option is on, and follows Sonos only for now. A sync
   group does not hold its members on a protocol for a member that follows. The visualizer player
   offers a `follow_delay_ms` setting while its bridge can follow, and hands it to the handler
   (`set_follow_delay`) before it follows and whenever the setting changes. The Hue bridge reads
@@ -818,7 +823,7 @@ already plays from the buffer of its queue item, timed to the leader's reported 
   (`follows_natively`), takes them off the protocol with the rest, and lets them follow the leader
   again (`Regroup.follower_ids`).
 
-See GROUP-59 in [SCENARIOS.md](SCENARIOS.md).
+See GROUP-62 in [SCENARIOS.md](SCENARIOS.md).
 
 ## Locking
 

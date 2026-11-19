@@ -64,7 +64,12 @@ def visualizer(monkeypatch: pytest.MonkeyPatch) -> SendspinVisualizerPlayer:
 
 def _handler() -> Mock:
     """Return a follow handler whose calls are recorded."""
-    return Mock(follow=AsyncMock(), unfollow=AsyncMock(), set_follow_delay=Mock())
+    return Mock(
+        follow=AsyncMock(),
+        unfollow=AsyncMock(),
+        set_follow_delay=Mock(),
+        follow_domains=frozenset({"sonos"}),
+    )
 
 
 async def test_a_registered_handler_lets_the_player_follow(
@@ -75,6 +80,7 @@ async def test_a_registered_handler_lets_the_player_follow(
     cast("SendspinProvider", visualizer.provider).register_bridge_follow_handler(CLIENT_ID, handler)
 
     assert visualizer.can_follow
+    assert visualizer.follow_domains == {"sonos"}
     await visualizer.follow("leader")
     await visualizer.unfollow()
 
@@ -87,6 +93,7 @@ async def test_without_a_handler_the_player_can_not_follow(
 ) -> None:
     """A client without a bridge that follows refuses to follow; unfollow is a no-op."""
     assert not visualizer.can_follow
+    assert visualizer.follow_domains == frozenset()
     with pytest.raises(PlayerCommandFailed):
         await visualizer.follow("leader")
     await visualizer.unfollow()

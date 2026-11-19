@@ -2105,8 +2105,8 @@ as that of Den, which is online.
 ### GROUP-62 · A light follows a speaker that keeps playing over its own protocol
 
 Patio is a Sonos speaker that plays natively, and Patio Lights is a Hue entertainment area that
-the Hue Lights Sync provider runs as a Sendspin light. Patio can group with the light though the
-two share no protocol. The user adds the light to Patio: the light follows Patio instead of
+the Hue Lights Sync provider runs as a Sendspin light, with "Follow Sonos speakers on their native
+protocol" turned on. Patio can group with the light though the two share no protocol. The user adds the light to Patio: the light follows Patio instead of
 joining a protocol group, so Patio does not move to Sendspin and keeps playing natively. The
 light shows as synced to Patio, Patio lists it as a member, and it has no part in Patio's group
 volume, and a playback command sent to the light is refused rather than passed on to Patio. The lights take the features of the audio Patio already plays, read from the buffer of
@@ -2117,7 +2117,10 @@ other member, and a light that follows becomes such a member once a Sendspin spe
 moves the group onto Sendspin. When that speaker leaves again, Patio plays on over Sendspin
 until playback next starts afresh; then Patio regroups to play natively and the light follows it
 again. A player that renders audio itself, or whose protocol can not follow, never
-follows.
+follows. A light follows only a leader on a protocol it names (the Hue lights: Sonos): added to
+a Chromecast or AirPlay speaker, or to a Sonos speaker that plays over AirPlay, it joins over
+Sendspin as any member does. With the option off the light follows no speaker and always joins
+over Sendspin; turning it off while the light follows takes the light out of Patio's group.
 
 - End-to-end: **possible with** a native speaker and a light whose bridge can follow; the lab has
   no stand-in for a Hue bridge.
@@ -2135,6 +2138,11 @@ follows.
   - `tests/controllers/players/test_grouping_executor.py::test_a_regroup_lets_its_lights_follow_again`
   - `tests/controllers/players/test_follow.py::test_playback_commands_on_a_follower_are_refused`
   - `tests/controllers/players/test_follow.py::test_play_media_on_a_follower_is_refused`
+  - `tests/controllers/players/test_follow.py::test_a_leader_offers_only_lights_that_can_follow_its_protocol`
+  - `tests/providers/sync_group/test_sync_group.py::test_a_member_that_follows_does_not_hold_the_group_on_a_protocol`
+  - `tests/providers/hue_entertainment/test_bridge.py::test_the_lights_follow_speakers_only_when_the_option_is_on`
+  - `tests/providers/hue_entertainment/test_bridge.py::test_the_lights_follow_only_sonos`
+  - `tests/providers/hue_entertainment/test_bridge.py::test_a_stopping_bridge_releases_the_light_from_its_speaker`
   - `tests/providers/hue_entertainment/test_follow.py::test_a_seek_reanchors_once_it_holds`
   - `tests/providers/hue_entertainment/test_follow.py::test_a_jump_to_the_start_waits_for_the_next_item`
 

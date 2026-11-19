@@ -43,6 +43,10 @@
     "hue_latency_ms": {
       "label": "Light latency (ms)",
       "description": "Milliseconds to render light updates ahead of the audio, to offset the delay of the Hue bridge or the Zigbee network. Increase if the lights lag the music, decrease if they run ahead of it."
+    },
+    "follow_speakers": {
+      "label": "Follow Sonos speakers on their native protocol",
+      "description": "Off: grouping a light with a speaker always moves the group onto Sendspin. On: a light grouped with a Sonos speaker follows its audio, and the speaker keeps playing over its native Sonos protocol. For now this only works with Sonos speakers; other speakers still move onto Sendspin."
     }
   },
   "setup_flow": {

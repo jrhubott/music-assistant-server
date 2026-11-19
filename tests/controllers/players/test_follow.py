@@ -7,9 +7,11 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from music_assistant_models.enums import PlayerType
 from music_assistant_models.errors import PlayerCommandFailed
 
 from music_assistant.controllers.players import PlayerController
+from music_assistant.models.player import Player
 from tests.common import MockProtocol, MockProvider, attach_mock
 
 
@@ -197,3 +199,26 @@ def test_the_leader_of_a_follower_is_not_refused(real_controller: PlayerControll
     leader = real_controller.get_player(leader_id)
     assert leader is not None
     real_controller._refuse_follower(leader)
+
+
+@pytest.mark.parametrize(
+    ("leader_domain", "expected"),
+    [("sonos", frozenset({"light"})), ("airplay", frozenset())],
+    ids=["sonos-leader", "other-leader"],
+)
+def test_a_leader_offers_only_lights_that_can_follow_its_protocol(
+    leader_domain: str, expected: frozenset[str]
+) -> None:
+    """A speaker lists a light it shares no protocol with only when the light follows its own."""
+    light = MagicMock(player_id="light")
+    light.own_protocol.follow_domains = frozenset({"sonos"})
+    light.own_protocol.player = light
+    leader = MagicMock(player_id="leader", reported_type=PlayerType.PLAYER)
+    leader.own_protocol.provider.domain = leader_domain
+    leader.mass.players.followed_player = MagicMock(return_value=None)
+    leader.mass.players.followers_of = MagicMock(return_value=[])
+    leader.mass.players.iter_protocols = MagicMock(return_value=[light.own_protocol])
+
+    _, _, followable = Player._collect_follows(leader, {}, True)
+
+    assert followable == expected

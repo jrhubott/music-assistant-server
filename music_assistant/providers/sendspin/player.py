@@ -3280,9 +3280,11 @@ class SendspinVisualizerPlayer(SendspinBasePlayer):
         self._attr_supported_features = {PlayerFeature.SET_MEMBERS}
 
     @property
-    def can_follow(self) -> bool:
-        """Return whether the bridge of this client can follow a leader."""
-        return self._follow_handler is not None
+    def follow_domains(self) -> frozenset[str]:
+        """Return the protocol domains of the leaders the bridge of this client can follow."""
+        if (handler := self._follow_handler) is None:
+            return frozenset()
+        return handler.follow_domains
 
     async def follow(self, player_id: str) -> None:
         """

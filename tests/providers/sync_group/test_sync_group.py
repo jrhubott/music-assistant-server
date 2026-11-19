@@ -4256,25 +4256,31 @@ class TestProtocolLookups:
         assert sgp.source_list == native.source_list
 
 
-def _domain_member(domains: set[str], *, can_follow: bool = False) -> MagicMock:
+def _domain_member(domains: set[str], *, follow_domains: frozenset[str] = frozenset()) -> MagicMock:
     """Return an online member with the given playback paths."""
     member = MagicMock(available=True, offline_by_power_control=False, playback_domains=domains)
-    member.own_protocol.can_follow = can_follow
+    member.own_protocol.follow_domains = follow_domains
     return member
 
 
 @pytest.mark.parametrize(
-    ("can_follow", "expected"), [(True, True), (False, False)], ids=["follower", "speaker"]
+    ("follow_domains", "domain", "expected"),
+    [
+        (frozenset({"sonos"}), "sonos", True),
+        (frozenset(), "sonos", False),
+        (frozenset({"sonos"}), "airplay", False),
+    ],
+    ids=["follower", "speaker", "follower-of-another-protocol"],
 )
 def test_a_member_that_follows_does_not_hold_the_group_on_a_protocol(
-    can_follow: bool, expected: bool
+    follow_domains: frozenset[str], domain: str, expected: bool
 ) -> None:
-    """A light that follows the leader needs no Sonos path; a speaker without one does."""
+    """A light that can follow the leader on a domain needs no path on it; others do."""
     members = {
         "sonos": _domain_member({"sonos", "airplay"}),
-        "light": _domain_member({"sendspin"}, can_follow=can_follow),
+        "light": _domain_member({"sendspin"}, follow_domains=follow_domains),
     }
     sgp = MagicMock(_attr_group_members=list(members))
     sgp.mass.players.get_player = MagicMock(side_effect=members.get)
 
-    assert SyncGroupPlayer._all_members_can_play_on_domain(sgp, "sonos") is expected
+    assert SyncGroupPlayer._all_members_can_play_on_domain(sgp, domain) is expected

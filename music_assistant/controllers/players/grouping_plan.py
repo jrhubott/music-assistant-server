@@ -135,7 +135,8 @@ class PlayerView:
     :param active_queue: The queue it plays, if any.
     :param follows: The player it follows instead of joining its group.
     :param followers: The players that follow it.
-    :param can_follow: Its own protocol can follow a leader instead of joining its group.
+    :param follow_domains: The protocol domains of the leaders it can follow instead of joining
+        their group.
     """
 
     player_id: str
@@ -162,7 +163,12 @@ class PlayerView:
     active_queue: QueueView | None = None
     follows: str | None = None
     followers: tuple[str, ...] = ()
-    can_follow: bool = False
+    follow_domains: frozenset[str] = frozenset()
+
+    @property
+    def can_follow(self) -> bool:
+        """Return whether it can follow a leader on any protocol."""
+        return bool(self.follow_domains)
 
     def output_by_domain(self, domain: str) -> OutputView | None:
         """
@@ -759,9 +765,13 @@ def first_grouped_protocol[T: GroupedProtocol](protocols: Iterable[T]) -> T | No
 def _follows_beside(
     snapshot: GroupingSnapshot, member: PlayerView, leader_domain: str | None
 ) -> bool:
-    """Return whether a member follows a leader that plays over another protocol than its own."""
+    """Return whether a member follows a leader that plays over a protocol it can follow."""
     member_own = snapshot.own(member)
-    return member_own is not None and leader_domain != member_own.domain
+    return (
+        member_own is not None
+        and leader_domain != member_own.domain
+        and leader_domain in member.follow_domains
+    )
 
 
 class _Boundary(Exception):

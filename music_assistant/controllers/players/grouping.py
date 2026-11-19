@@ -604,7 +604,7 @@ def _player_view(players: _PlayerControllerBase, player: Player) -> PlayerView:
         active_queue=_queue_view(players.get_active_queue(player)),
         follows=players.followed_player(player.player_id),
         followers=tuple(players.followers_of(player.player_id)),
-        can_follow=own is not None and own.can_follow,
+        follow_domains=own.follow_domains if own is not None else frozenset(),
     )
 
 

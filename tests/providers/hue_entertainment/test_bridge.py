@@ -6,13 +6,14 @@ import asyncio
 from collections.abc import AsyncIterator, Coroutine
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from hue_entertainment import LightChannel
 
 from music_assistant.providers.hue_entertainment import bridge as bridge_module
 from music_assistant.providers.hue_entertainment.bridge import HueEntertainmentBridge
+from music_assistant.providers.hue_entertainment.constants import CONF_FOLLOW_SPEAKERS
 from music_assistant.providers.hue_entertainment.targets import TargetUnavailableError
 
 
@@ -229,3 +230,73 @@ async def test_the_follow_trim_shifts_the_render_time(
     bridge._follow_session = None
 
     analyzer.render.assert_called_once_with(70_000)
+
+
+def _started_bridge_parts(
+    target: FakeTarget, follow_speakers: bool | None
+) -> tuple[HueEntertainmentBridge, Mock, Mock]:
+    """Return a bridge whose Sendspin provider and server are mocks, with the option set."""
+    loop = asyncio.get_running_loop()
+    values = {CONF_FOLLOW_SPEAKERS: follow_speakers}
+    sendspin_prov = Mock()
+    players = Mock(followed_player=Mock(return_value=None), cmd_ungroup=AsyncMock())
+    provider: Any = SimpleNamespace(
+        mass=SimpleNamespace(
+            loop=loop,
+            create_task=loop.create_task,
+            get_provider=Mock(return_value=sendspin_prov),
+            players=players,
+        ),
+        config=Mock(get_value=Mock(side_effect=values.get)),
+    )
+    client = Mock(roles_by_family=Mock(return_value=[]))
+    sendspin_server: Any = SimpleNamespace(
+        clock=SimpleNamespace(now_us=lambda: 0),
+        register_external_player=Mock(return_value=client),
+        remove_client=AsyncMock(),
+    )
+    return HueEntertainmentBridge(provider, target, sendspin_server), sendspin_prov, players
+
+
+@pytest.mark.parametrize(
+    ("follow_speakers", "follows"),
+    [(True, True), (False, False), (None, False)],
+    ids=["on", "off", "default-off"],
+)
+async def test_the_lights_follow_speakers_only_when_the_option_is_on(
+    target: FakeTarget, follow_speakers: bool | None, follows: bool
+) -> None:
+    """Off, the light gets no follow handler: grouped with any speaker it joins over Sendspin."""
+    bridge, sendspin_prov, _ = _started_bridge_parts(target, follow_speakers)
+
+    await bridge.start()
+    await bridge.stop()
+
+    registered = [
+        call.args
+        for call in sendspin_prov.register_bridge_follow_handler.call_args_list
+        if call.args[1] is not None
+    ]
+    assert registered == ([(target.client_id, bridge)] if follows else [])
+    # a stopped bridge leaves no handler behind
+    sendspin_prov.register_bridge_follow_handler.assert_called_with(target.client_id, None)
+
+
+async def test_the_lights_follow_only_sonos(target: FakeTarget) -> None:
+    """The bridge follows a speaker only on Sonos' native protocol for now."""
+    bridge, _, _ = _started_bridge_parts(target, True)
+
+    assert bridge.follow_domains == {"sonos"}
+
+
+async def test_a_stopping_bridge_releases_the_light_from_its_speaker(target: FakeTarget) -> None:
+    """Turning the option off reloads the plugin; a light that follows leaves its group."""
+    bridge, sendspin_prov, players = _started_bridge_parts(target, True)
+    await bridge.start()
+    sendspin_prov.get_protocol.return_value.player.player_id = "light"
+    players.followed_player.return_value = "sonos"
+    bridge._follow_session = Mock(stop=AsyncMock())
+
+    await bridge.stop()
+
+    players.cmd_ungroup.assert_awaited_once_with("light")

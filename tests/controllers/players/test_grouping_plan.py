@@ -1274,7 +1274,7 @@ def _with_light(world: _World, **light: Any) -> None:
         "h",
         "sendspin_h",
         type=light.pop("type", PlayerType.LIGHT),
-        can_follow=light.pop("can_follow", True),
+        follow_domains=light.pop("follow_domains", frozenset({"sonos"})),
         **light,
     )
 
@@ -1313,11 +1313,21 @@ def test_a_light_joins_a_leader_that_plays_over_its_protocol() -> None:
 
 @pytest.mark.parametrize(
     "light",
-    [{"can_follow": False}, {"type": PlayerType.PLAYER}],
-    ids=["cannot-follow", "renders-audio"],
+    [
+        {"follow_domains": frozenset()},
+        {"follow_domains": frozenset({"chromecast"})},
+        {"type": PlayerType.PLAYER},
+        {"leader_output": "airplay_s"},
+    ],
+    ids=["cannot-follow", "follows-other-protocols", "renders-audio", "leader-on-airplay"],
 )
 def test_only_a_non_audio_player_that_can_follow_follows(light: dict[str, Any]) -> None:
-    """A player that can not follow, or plays audio itself, joins the protocol group."""
+    """
+    A player joins the protocol group unless it renders no audio and can follow the leader.
+
+    It can follow a leader only on a protocol it names in follow_domains: a light that only
+    follows Sonos joins a Sonos speaker that plays over AirPlay like any other member.
+    """
     world = _World()
     _with_light(world, **light)
     plan = _all_plans(world, ChangeKind.MEMBERS, "s", ("h",))
