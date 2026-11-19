@@ -30,6 +30,7 @@ def _provider() -> SendspinProvider:
         mass=SimpleNamespace(get_provider=Mock(return_value=None)),
         logger=Mock(),
         server_api=SimpleNamespace(get_client=Mock(return_value=client)),
+        sources=Mock(),
         _bridge_follow_handlers={},
     )
     for name in ("register_bridge_follow_handler", "get_bridge_follow_handler"):
