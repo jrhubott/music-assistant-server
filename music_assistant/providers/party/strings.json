@@ -111,11 +111,27 @@
     "boost_badge_color": {
       "label": "Boost Badge Color",
       "description": "Color for the 'Boost' badge shown on priority guest requests."
+    },
+    "kiosk_link_note": {
+      "label": "Show the party dashboard on a TV or tablet without signing in: create a TV link and open it in the browser on that screen. It works on your home network."
+    },
+    "kiosk_link_url": {
+      "label": "Open this link in the browser on the TV. Anyone who has it can view the party dashboard until you revoke it: {0}"
+    },
+    "create_kiosk_link": {
+      "label": "Create TV link"
+    },
+    "replace_kiosk_link": {
+      "label": "Replace TV link"
+    },
+    "revoke_kiosk_link": {
+      "label": "Revoke TV link"
     }
   },
   "config_categories": {
     "guest_features": "Guest Features",
-    "karaoke": "Karaoke"
+    "karaoke": "Karaoke",
+    "tv_link": "TV link"
   },
   "manifest": {
     "description": "Enable guest access with a shareable URL for party, allowing guests to add songs to the queue with rate limiting."
