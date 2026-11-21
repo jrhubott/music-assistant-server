@@ -833,7 +833,7 @@ already plays from the buffer of its queue item, timed to the leader's reported 
   (`follows_natively`), takes them off the protocol with the rest, and lets them follow the leader
   again (`Regroup.follower_ids`).
 
-See GROUP-62 in [SCENARIOS.md](SCENARIOS.md).
+See GROUP-900 in [SCENARIOS.md](SCENARIOS.md).
 
 ## Locking
 
