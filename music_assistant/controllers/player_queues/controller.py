@@ -72,6 +72,8 @@ from music_assistant.controllers.player_queues.constants import (
     DEFAULT_CROSSFADE_ENABLED,
     FLOW_PLAYED_OUT_MARGIN,
     FLOW_PLAYOUT_IDLE_TIMEOUT,
+    LOST_FLOW_RESTART_LIMIT,
+    LOST_FLOW_RESTART_WINDOW,
     PLAYBACK_START_TIMEOUT,
     QUEUE_CACHE_SAVE_DELAY,
 )
@@ -1436,6 +1438,48 @@ class PlayerQueuesController(QueueLoaderMixin, PlaybackTrackerMixin, StreamFeede
         played = player.state.corrected_elapsed_time or 0
         return played >= streamed - FLOW_PLAYED_OUT_MARGIN
 
+    def restart_lost_flow_stream(self, queue_id: str, session_id: str) -> bool:
+        """
+        Restart a queue at the position that plays now, for a flow stream its player lost.
+
+        Only the current session restarts, once, and a queue at most LOST_FLOW_RESTART_LIMIT
+        times within LOST_FLOW_RESTART_WINDOW seconds. A stopped or paused queue and a flow
+        stream that was fully generated do not restart.
+
+        :param queue_id: The queue whose flow stream the player lost.
+        :param session_id: The stream session of the lost flow stream.
+        :return: Whether the queue restarts, or already does for this session.
+        """
+        if not self._lost_flow_stream_restartable(queue_id, session_id):
+            return False
+        queue_data = self._queue_data[queue_id]
+        if queue_data.flow_restarted_session_id == session_id:
+            return True
+        now = time.monotonic()
+        restart_times = [
+            t for t in queue_data.flow_restart_times if now - t < LOST_FLOW_RESTART_WINDOW
+        ]
+        if len(restart_times) >= LOST_FLOW_RESTART_LIMIT:
+            self.logger.warning(
+                "Not restarting %s after its player lost the stream: it restarted %s times "
+                "in the last %s minutes already",
+                queue_data.queue.display_name,
+                len(restart_times),
+                LOST_FLOW_RESTART_WINDOW // 60,
+            )
+            return False
+        queue_data.flow_restart_times = [*restart_times, now]
+        queue_data.flow_restarted_session_id = session_id
+        self.logger.info(
+            "Restarting %s where it plays now: its player lost the stream",
+            queue_data.queue.display_name,
+        )
+        self.mass.create_task(
+            self._restart_lost_flow_stream(queue_id, session_id),
+            task_id=f"restart_lost_flow_stream_{queue_id}_{session_id}",
+        )
+        return True
+
     # Main queue manipulation methods
 
     async def load(
@@ -1810,10 +1854,39 @@ class PlayerQueuesController(QueueLoaderMixin, PlaybackTrackerMixin, StreamFeede
                 # only the stopped session's audio is released. A stop that had no session
                 # owns none of what is here, and taking it down would hit playback that
                 # started while this stop was still waiting on the device
-                if queue_data.session_id == session_id:
-                    queue_data.session_id = None
-                self.mass.streams.audio_processing.clear(queue_id, session_id)
-                self.mass.create_task(self._cleanup_queue_audio_data(queue_id, session_id))
+                self._end_session(queue_data, session_id)
+
+    def _end_session(self, queue_data: PlayerQueueData, session_id: str) -> None:
+        """
+        Release the audio of a playback session of the queue.
+
+        :param queue_data: The data of the queue the session belongs to.
+        :param session_id: The session to release.
+        """
+        queue_id = queue_data.queue.queue_id
+        if queue_data.session_id == session_id:
+            queue_data.session_id = None
+        self.mass.streams.audio_processing.clear(queue_id, session_id)
+        self.mass.create_task(self._cleanup_queue_audio_data(queue_id, session_id))
+
+    async def _end_failed_start(self, queue_data: PlayerQueueData) -> None:
+        """
+        End a start of the queue that could not load an item.
+
+        Stops the queue's player, unless it plays along with a group or sync leader: then its
+        device keeps playing and only the session of this start is ended.
+
+        :param queue_data: The data of the queue whose start failed.
+        """
+        queue_id = queue_data.queue.queue_id
+        player = self.mass.players.get_player(queue_id)
+        if player is None or self.mass.players._audio_source_owner(player) is player:
+            await self.stop(queue_id)
+            return
+        # the player still plays the stream of its group or sync leader, which a stop
+        # would end on the device, so only the session this start opened is let go
+        if queue_data.session_id is not None:
+            self._end_session(queue_data, queue_data.session_id)
 
     @handle_play_action
     async def _handle_play(self, queue_id: str) -> None:
@@ -1965,6 +2038,26 @@ class PlayerQueuesController(QueueLoaderMixin, PlaybackTrackerMixin, StreamFeede
             keep_remaining=False,
             shuffle=shuffle_enabled,
         )
+
+    def _lost_flow_stream_restartable(self, queue_id: str, session_id: str) -> bool:
+        """Return whether a queue may restart the lost flow stream of a session."""
+        queue_data = self.queue_data_or_none(queue_id)
+        if (
+            queue_data is None
+            or queue_data.session_id != session_id
+            or queue_data.queue.state == PlaybackState.PAUSED
+            or queue_data.flow_buffer_completed == session_id
+        ):
+            return False
+        return self.mass.players.get_player(queue_id) is not None
+
+    async def _restart_lost_flow_stream(self, queue_id: str, session_id: str) -> None:
+        """Resume a queue where it plays now, unless a command took it over meanwhile."""
+        async with self.mass.players.get_group_and_player_lock(queue_id):
+            # a command that held or waited for the lock (stop, next, play) went first
+            if not self._lost_flow_stream_restartable(queue_id, session_id):
+                return
+            await self.resume(queue_id, fade_in=False)
 
     def _resolve_default_toggles(self, queue_data: PlayerQueueData) -> None:
         """Set the queue's effective autoplay/crossfade from their override or the global default."""
@@ -2121,7 +2214,7 @@ class PlayerQueuesController(QueueLoaderMixin, PlaybackTrackerMixin, StreamFeede
                         # or asked us to back off: report that instead of silently
                         # advancing to another item
                         self.logger.error("%s", err)
-                        await self.stop(queue_id)
+                        await self._end_failed_start(queue_data)
                         raise
                     # Only MediaNotFoundError (item unreachable) is persistent;
                     # keep AudioError items available so a retry can resurface
@@ -2137,7 +2230,7 @@ class PlayerQueuesController(QueueLoaderMixin, PlaybackTrackerMixin, StreamFeede
                         else:
                             msg = f"Playback failed for {item_name} - no more tracks available"
                         self.logger.error(msg)
-                        await self.stop(queue_id)
+                        await self._end_failed_start(queue_data)
                         raise MediaNotFoundError(msg) from err
                     self.logger.warning(
                         "Skipping unplayable item %s: %s",
@@ -2147,7 +2240,7 @@ class PlayerQueuesController(QueueLoaderMixin, PlaybackTrackerMixin, StreamFeede
                     index = next_index
             else:
                 # all attempts to find a playable item failed
-                await self.stop(queue_id)
+                await self._end_failed_start(queue_data)
                 raise MediaNotFoundError("No playable item found to start playback")
 
             # Reset flow_mode - the streams controller will set it if flow mode is used.
