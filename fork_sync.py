@@ -11,6 +11,9 @@ handles one target (`--target`), or all of them in turn:
    so a push you made in the meantime is never overwritten; the run just retries next time.
 3. Optionally rebases the branches in `rebase_features` onto upstream (empty by default:
    a branch that is merged into `edge` should not also be rebased, or its commits come in twice).
+4. Checks the branch against its `features` list. A listed branch that is gone, or a commit that
+   is on the branch but on neither upstream nor a listed feature, fails the run. A feature with
+   unmerged commits, or one that no longer merges cleanly with upstream, is only reported.
 
 Nothing is pushed for a merge that conflicts or fails its tests. The run then exits non-zero
 (GitHub mails you about failed scheduled runs) and, when the fork has issues enabled, opens or
@@ -103,15 +106,16 @@ class Sync:
 
     # -- steps -------------------------------------------------------------------
 
-    def merge_edge(self, upstream_tip: str) -> None:
+    def merge_edge(self, upstream_tip: str) -> str | None:
+        """Merge upstream into the branch and return the commit the branch is now at."""
         edge = self.cfg["edge_branch"]
         old = self.rev(f"{self.fork}/{edge}")
         if not old:
             self.problems.append(f"`{edge}` does not exist on the fork.")
-            return
+            return None
         if self.ok("merge-base", "--is-ancestor", upstream_tip, old):
             self.notes.append(f"`{edge}` already contains upstream `{self.base}` ({upstream_tip[:9]}).")
-            return
+            return old
         self.git("checkout", "-q", "-f", "--detach", old)
         message = f"Merge upstream {self.base} ({upstream_tip[:9]}) into {edge}"
         if not self.ok("merge", "--no-ff", "-m", message, upstream_tip):
@@ -121,13 +125,14 @@ class Sync:
                 f"Upstream `{self.base}` conflicts with `{edge}`; not merged. Merge it locally, "
                 f"resolve, and push. Conflicting files:\n{files}"
             )
-            return
+            return old
         new = self.git("rev-parse", "HEAD")
         if not self.run_tests(f"`{edge}` with upstream `{self.base}` merged in"):
-            return
+            return old
         # a plain push only fast-forwards, so it can never drop commits pushed meanwhile
         self.push(self.fork, f"{new}:refs/heads/{edge}")
         self.notes.append(f"Merged upstream `{self.base}` into `{edge}` ({new[:9]}).")
+        return new
 
     def rebase_features(self, upstream_tip: str) -> None:
         for feature in self.cfg.get("rebase_features", []):
@@ -152,6 +157,53 @@ class Sync:
                 continue
             self.push(f"--force-with-lease=refs/heads/{feature}:{old}", self.fork, f"{new}:refs/heads/{feature}")
             self.notes.append(f"Rebased `{feature}` onto upstream `{self.base}` ({new[:9]}).")
+
+    def patch_ids(self, *log_args: str) -> dict[str, str]:
+        """Return a map of patch id to commit for the commits `git log` selects."""
+        log = subprocess.run(
+            ["git", "log", "--no-merges", "-p", "--format=commit %H", *log_args],
+            capture_output=True,
+            check=True,
+        )
+        ids = subprocess.run(
+            ["git", "patch-id", "--stable"], input=log.stdout, capture_output=True, check=True
+        )
+        return dict(line.split() for line in ids.stdout.decode().splitlines())
+
+    def audit_features(self, tip: str, upstream_tip: str) -> None:
+        """Compare the branch with its declared `features` list."""
+        features = self.cfg.get("features")
+        if features is None:
+            return
+        refs: list[str] = []
+        for feature in features:
+            ref = self.rev(f"{self.fork}/{feature}")
+            if not ref:
+                self.problems.append(f"`{feature}` is listed for `{self.edge}` but is not on the fork.")
+                continue
+            refs.append(ref)
+            if not self.ok("merge-base", "--is-ancestor", ref, tip):
+                count = self.git("rev-list", "--count", ref, f"^{tip}")
+                self.notes.append(f"`{feature}` has {count} commit(s) not merged into `{self.edge}` yet.")
+            if not self.ok("merge-tree", "--write-tree", "--no-messages", upstream_tip, ref):
+                self.notes.append(
+                    f"`{feature}` no longer merges cleanly with upstream `{self.base}`. "
+                    "Merge upstream into the feature branch and resolve it there."
+                )
+        excluded = [f"^{ref}" for ref in refs]
+        stray = self.git("rev-list", "--no-merges", tip, f"^{upstream_tip}", *excluded).split()
+        if not stray:
+            return
+        # a rebuilt feature or a cherry-picked fix has a new SHA but the same patch
+        known = self.patch_ids(*refs, f"^{upstream_tip}") if refs else {}
+        for patch_id, commit in self.patch_ids("--no-walk", *stray).items():
+            if patch_id in known or self.git("cherry", upstream_tip, commit, f"{commit}^").startswith("-"):
+                continue
+            subject = self.git("log", "-1", "--format=%s", commit)
+            self.problems.append(
+                f"`{commit[:9]}` ({subject}) is only on `{self.edge}`. Move it to a feature branch "
+                "or add its branch to `features`."
+            )
 
     # -- reporting ---------------------------------------------------------------
 
@@ -197,8 +249,10 @@ class Sync:
         self.git("fetch", "-q", "--prune", "--no-tags", self.fork)
         self.git("fetch", "-q", "--no-tags", self.up, self.base)
         upstream_tip = self.git("rev-parse", f"{self.up}/{self.base}")
-        self.merge_edge(upstream_tip)
+        tip = self.merge_edge(upstream_tip)
         self.rebase_features(upstream_tip)
+        if tip:
+            self.audit_features(tip, upstream_tip)
         self.report()
         return 1 if self.problems else 0
 

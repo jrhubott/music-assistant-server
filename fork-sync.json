@@ -5,12 +5,23 @@
     {
       "edge_branch": "edge",
       "base_branch": "dev",
+      "features": [
+        "fix/dlna-sonos-zone",
+        "feature/hue-grouped-follow",
+        "feature/party-kiosk-link",
+        "feature/party-lyrics-delay",
+        "feature/party-screen-extras"
+      ],
       "rebase_features": [],
       "test_command": "uv pip install --system --quiet --index-strategy unsafe-best-match . .[test] -r requirements_all.txt && LD_PRELOAD=libstdc++.so.6 pytest -p numpy -q -n logical --dist loadfile --max-worker-restart=0 tests/controllers/players tests/providers/hue_entertainment tests/providers/sendspin tests/providers/sync_group tests/providers/dlna tests/providers/sonos tests/providers/sonos_s1 tests/helpers/test_upnp_sonos_zone.py tests/providers/party tests/models"
     },
     {
       "edge_branch": "stable",
       "base_branch": "stable",
+      "features": [
+        "fix/dlna-sonos-zone-stable",
+        "feature/party-kiosk-link-stable"
+      ],
       "rebase_features": [],
       "test_command": "uv pip install --system --quiet --index-strategy unsafe-best-match . .[test] -r requirements_all.txt && LD_PRELOAD=libstdc++.so.6 pytest -p numpy -q -n logical --dist loadfile --max-worker-restart=0 tests/controllers/players tests/providers/hue_entertainment tests/providers/sendspin tests/providers/sync_group tests/providers/dlna tests/providers/sonos tests/providers/sonos_s1 tests/providers/party tests/models"
     }

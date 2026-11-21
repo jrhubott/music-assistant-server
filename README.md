@@ -11,10 +11,16 @@ Full documentation (the record of truth for this setup) is the BookStack page
 `edge` is upstream `dev` plus every feature branch merged into it by hand. It is never
 rebased or force-pushed. Every day at 05:30 UTC (or from **Actions > Fork sync > Run workflow**)
 `fork_sync.py` merges upstream `dev` into `edge`, runs `test_command`, and pushes
-(fast-forward only). A conflict or failing test pushes nothing and fails the run; merge
-upstream into `edge` locally, resolve, and push.
+(fast-forward only). A conflict or failing test pushes nothing and fails the run. Merge
+upstream into the feature branch that conflicts, resolve it there, then merge that branch into
+`edge`. Only conflicts between two of your own features are resolved on `edge` itself.
 
-To add a feature: `git checkout edge && git pull && git merge feature/x && git push fork edge`.
+To add a feature: add it to `features` for the target in `fork-sync.json`, then
+`git checkout edge && git pull && git merge feature/x && git push fork edge`.
+
+Each run checks the branch against `features`. A listed branch that is gone, or a commit that is
+on neither upstream nor a listed feature, fails the run. A feature with unmerged commits, or one
+that no longer merges cleanly with upstream, is only reported in the run summary.
 
 ## stable
 
