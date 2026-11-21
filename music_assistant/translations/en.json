@@ -2253,6 +2253,8 @@
   "provider.party.config_entries.qr_text.label": "QR Code Text",
   "provider.party.config_entries.request_badge_color.description": "Color for the 'Request' badge shown on guest-added queue items.",
   "provider.party.config_entries.request_badge_color.label": "Request Badge Color",
+  "provider.party.config_entries.show_copy_link.description": "Show the button under the QR code that copies or shares the join link, and let the QR code be tapped to copy it. Guests can still scan the QR code when this is off.",
+  "provider.party.config_entries.show_copy_link.label": "Show Copy Link Button",
   "provider.party.config_entries.show_leaderboard.description": "Now and then show the guests that requested and boosted the most songs on the party screen. Needs guest nicknames.",
   "provider.party.config_entries.show_leaderboard.label": "Show DJ Leaderboard",
   "provider.party.config_entries.show_progress_bar.description": "When enabled, a progress bar will be displayed on the current playing song in the track list, visually indicating the progress of the currently playing song. ",

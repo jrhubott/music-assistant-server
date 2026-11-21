@@ -147,6 +147,10 @@
     "show_tips": {
       "label": "Show Tips for Guests",
       "description": "Show rotating tips on the party screen that explain how guests can join, request, boost, skip and react."
+    },
+    "show_copy_link": {
+      "label": "Show Copy Link Button",
+      "description": "Show the button under the QR code that copies or shares the join link, and let the QR code be tapped to copy it. Guests can still scan the QR code when this is off."
     }
   },
   "config_categories": {

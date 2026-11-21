@@ -97,6 +97,7 @@ CONF_SHOW_LEADERBOARD = "show_leaderboard"
 CONF_SHOW_SKIP_METER = "show_skip_meter"
 CONF_SHOW_REQUEST_ANIMATIONS = "show_request_animations"
 CONF_SHOW_TIPS = "show_tips"
+CONF_SHOW_COPY_LINK = "show_copy_link"
 
 # Color options for badges (name, hex value)
 # Green and Orange are listed first as they are the defaults
@@ -210,6 +211,7 @@ class PartyConfig(DataClassDictMixin):
     show_skip_meter: bool = False
     show_request_animations: bool = False
     show_tips: bool = False
+    show_copy_link: bool = True
 
 
 async def setup(
@@ -501,6 +503,13 @@ class PartyPlugin(PluginProvider):
                 depends_on=CONF_ENABLE_GUEST_ACCESS,
                 category="party_screen",
             ),
+            ConfigEntry(
+                key=CONF_SHOW_COPY_LINK,
+                type=ConfigEntryType.BOOLEAN,
+                default_value=True,
+                depends_on=CONF_ENABLE_GUEST_ACCESS,
+                category="party_screen",
+            ),
             # Badge color configuration
             ConfigEntry(
                 key=CONF_REQUEST_BADGE_COLOR,
@@ -759,6 +768,7 @@ class PartyPlugin(PluginProvider):
             and bool(self.config.get_value(CONF_SHOW_SKIP_METER)),
             show_request_animations=bool(self.config.get_value(CONF_SHOW_REQUEST_ANIMATIONS)),
             show_tips=bool(self.config.get_value(CONF_SHOW_TIPS)),
+            show_copy_link=bool(self.config.get_value(CONF_SHOW_COPY_LINK)),
         )
 
     async def get_leaderboard(self) -> list[LeaderboardEntry]:

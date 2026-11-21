@@ -23,6 +23,7 @@ from music_assistant.providers.party import (
     CONF_ENABLE_SHOUT_OUTS,
     CONF_ENABLE_SKIP_SONG,
     CONF_PREVENT_DUPLICATE_TRACKS,
+    CONF_SHOW_COPY_LINK,
     CONF_SHOW_LEADERBOARD,
     CONF_SHOW_REQUEST_ANIMATIONS,
     CONF_SHOW_SKIP_METER,
@@ -68,6 +69,7 @@ def _create_plugin(**overrides: Any) -> PartyPlugin:
         CONF_SHOW_SKIP_METER: True,
         CONF_SHOW_REQUEST_ANIMATIONS: True,
         CONF_SHOW_TIPS: True,
+        CONF_SHOW_COPY_LINK: False,
         **overrides,
     }
     cast("MagicMock", plugin.config.get_value).side_effect = config_values.get
@@ -274,6 +276,7 @@ async def test_party_config_exposes_the_screen_options() -> None:
     assert config.show_skip_meter is True
     assert config.show_request_animations is True
     assert config.show_tips is True
+    assert config.show_copy_link is False
 
 
 @pytest.mark.asyncio
