@@ -29,11 +29,13 @@ from music_assistant.providers.party import (
     CONF_ENABLE_GUEST_ACCESS,
     CONF_ENABLE_SKIP_SONG,
     CONF_PARTY_DURATION,
+    CONF_PARTY_KARAOKE_MODE,
     CONF_PARTY_LYRICS_DELAY,
     CONF_PARTY_MODE,
     CONF_PARTY_PLAYER,
     CONF_PARTY_PLAYER_AUTO,
     CONF_PARTY_SKIP_VOTES_REQUIRED,
+    CONF_PARTY_WORD_HIGHLIGHT,
     CONF_PREVENT_DUPLICATE_TRACKS,
     PartyPlugin,
 )
@@ -489,6 +491,34 @@ async def test_get_config_entries_lyrics_delay_is_a_bounded_karaoke_option() -> 
     assert entry.type == ConfigEntryType.INTEGER
     assert entry.default_value == 0
     assert entry.range == (-5000, 5000)
+    assert entry.category == "karaoke"
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.asyncio
+async def test_get_party_config_exposes_word_highlight(enabled: bool) -> None:
+    """get_party_config passes the word highlight choice to the dashboard."""
+    plugin = _create_party_plugin()
+    cast("MagicMock", plugin.config.get_value).side_effect = {
+        CONF_PARTY_WORD_HIGHLIGHT: enabled
+    }.get
+
+    config = await plugin.get_party_config()
+
+    assert config.word_highlight is enabled
+
+
+@pytest.mark.asyncio
+async def test_get_config_entries_word_highlight_defaults_on() -> None:
+    """Word highlighting is a karaoke option that starts enabled."""
+    plugin = _create_config_entries_plugin(guest_access_enabled=True)
+
+    entries = {entry.key: entry for entry in await plugin.get_config_entries()}
+
+    entry = entries[CONF_PARTY_WORD_HIGHLIGHT]
+    assert entry.type == ConfigEntryType.BOOLEAN
+    assert entry.default_value is True
+    assert entry.depends_on == CONF_PARTY_KARAOKE_MODE
     assert entry.category == "karaoke"
 
 

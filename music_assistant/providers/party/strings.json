@@ -56,6 +56,10 @@
       "label": "Lyrics Delay (ms)",
       "description": "Hold the karaoke lyrics back by this many milliseconds to match speakers that play the music late, such as AirPlay, Chromecast or Sonos groups. Use a negative value to show the lyrics earlier."
     },
+    "word_highlight": {
+      "label": "Highlight Lyrics Word by Word",
+      "description": "When enabled, each word of the current lyric line fills in as it is sung. When disabled, the whole line is highlighted at once."
+    },
     "anti_burn_in": {
       "label": "Enable Anti Burn-in",
       "description": "Periodically swap the QR code and track list sides to prevent burn-in on OLED or plasma displays. Sides swap every 10 minutes."
