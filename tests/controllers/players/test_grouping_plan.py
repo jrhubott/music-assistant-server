@@ -1263,6 +1263,7 @@ def _with_light(world: _World, **light: Any) -> None:
         "sonos_s",
         "airplay_s",
         "sendspin_s",
+        type=light.pop("leader_type", PlayerType.PLAYER),
         can_group_with=frozenset({"b", "h"}),
         playback_state=PLAYING,
         active_output=light.pop("leader_output", "native"),
@@ -1279,10 +1280,13 @@ def _with_light(world: _World, **light: Any) -> None:
     )
 
 
-def test_a_light_follows_a_leader_that_plays_over_its_own_protocol() -> None:
+@pytest.mark.parametrize("leader_type", [PlayerType.PLAYER, PlayerType.MULTI_CHANNEL])
+def test_a_light_follows_a_leader_that_plays_over_its_own_protocol(
+    leader_type: PlayerType,
+) -> None:
     """A light joining a native Sonos leader follows it: no protocol join moves the leader."""
     world = _World()
-    _with_light(world)
+    _with_light(world, leader_type=leader_type)
     plan = _all_plans(world, ChangeKind.MEMBERS, "s", ("h",))
     assert _calls(plan) == [
         PrepareForPlayback(player_id="h"),
@@ -1370,9 +1374,11 @@ def test_a_follower_joins_once_its_leader_plays_over_its_protocol(
     assert followers_to_join(world.snapshot(), "s") == expected
 
 
-def _light_left_on_sendspin(world: _World, *others: str) -> None:
+def _light_left_on_sendspin(
+    world: _World, *others: str, leader_type: PlayerType = PlayerType.PLAYER
+) -> None:
     """Let Sonos leader s play over Sendspin with light h, and any other members, grouped."""
-    _with_light(world, leader_output="sendspin_s", synced_to="s")
+    _with_light(world, leader_output="sendspin_s", leader_type=leader_type, synced_to="s")
     world.protocols["sendspin_s"] = replace(
         world.protocols["sendspin_s"],
         group_members=("sendspin_s", "sendspin_h", *(f"sendspin_{other}" for other in others)),
@@ -1382,10 +1388,13 @@ def _light_left_on_sendspin(world: _World, *others: str) -> None:
         world.player(other, f"sendspin_{other}")
 
 
-def test_a_light_left_on_sendspin_follows_again_at_a_fresh_start() -> None:
+@pytest.mark.parametrize("leader_type", [PlayerType.PLAYER, PlayerType.MULTI_CHANNEL])
+def test_a_light_left_on_sendspin_follows_again_at_a_fresh_start(
+    leader_type: PlayerType,
+) -> None:
     """Once the last Sendspin speaker left, the leader regroups natively and the light follows."""
     world = _World()
-    _light_left_on_sendspin(world)
+    _light_left_on_sendspin(world, leader_type=leader_type)
     plan = _plan(world, ChangeKind.REGROUP_FOR_START, "s")
     assert plan.regroup == Regroup(
         leader_id="s",

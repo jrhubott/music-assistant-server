@@ -201,19 +201,20 @@ def test_the_leader_of_a_follower_is_not_refused(real_controller: PlayerControll
     real_controller._refuse_follower(leader)
 
 
+@pytest.mark.parametrize("leader_type", [PlayerType.PLAYER, PlayerType.MULTI_CHANNEL])
 @pytest.mark.parametrize(
     ("leader_domain", "expected"),
     [("sonos", frozenset({"light"})), ("airplay", frozenset())],
     ids=["sonos-leader", "other-leader"],
 )
 def test_a_leader_offers_only_lights_that_can_follow_its_protocol(
-    leader_domain: str, expected: frozenset[str]
+    leader_domain: str, expected: frozenset[str], leader_type: PlayerType
 ) -> None:
     """A speaker lists a light it shares no protocol with only when the light follows its own."""
     light = MagicMock(player_id="light")
     light.own_protocol.follow_domains = frozenset({"sonos"})
     light.own_protocol.player = light
-    leader = MagicMock(player_id="leader", reported_type=PlayerType.PLAYER)
+    leader = MagicMock(player_id="leader", reported_type=leader_type)
     leader.own_protocol.provider.domain = leader_domain
     leader.mass.players.followed_player = MagicMock(return_value=None)
     leader.mass.players.followers_of = MagicMock(return_value=[])

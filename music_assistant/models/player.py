@@ -137,8 +137,10 @@ _CONFIG_CACHED_PROPS = frozenset({"_hide_in_ui", "_expose_to_ha"})
 # the others are its audio protocols.
 OWN_PROTOCOL_ROLES = frozenset({ProtocolRole.NATIVE, ProtocolRole.CONTROL, ProtocolRole.VIRTUAL})
 
-# the types of player another player can follow: a single device that renders audio itself
-FOLLOWABLE_LEADER_TYPES = frozenset({PlayerType.PLAYER, PlayerType.STEREO_PAIR})
+# the types of player another player can follow: a device or set that renders audio itself
+FOLLOWABLE_LEADER_TYPES = frozenset(
+    {PlayerType.PLAYER, PlayerType.STEREO_PAIR, PlayerType.MULTI_CHANNEL}
+)
 
 # Audio protocols that take volume and mute commands without a stream running, in the
 # order they are preferred for it (airplay and sendspin only do while streaming).
