@@ -634,7 +634,7 @@ def follows_instead(snapshot: GroupingSnapshot, target: PlayerView, member: Play
     """
     if not member.can_follow or member.type in PLAYBACK_TARGET_TYPES:
         return False
-    if target.type not in (PlayerType.PLAYER, PlayerType.STEREO_PAIR):
+    if target.type not in (PlayerType.PLAYER, PlayerType.STEREO_PAIR, PlayerType.MULTI_CHANNEL):
         return False
     # a leader that already plays over the member's protocol takes it into that group
     if target.active_output not in (None, "native"):
@@ -653,7 +653,7 @@ def follows_natively(snapshot: GroupingSnapshot, target: PlayerView, member: Pla
     """
     if not member.can_follow or member.type in PLAYBACK_TARGET_TYPES:
         return False
-    if target.type not in (PlayerType.PLAYER, PlayerType.STEREO_PAIR):
+    if target.type not in (PlayerType.PLAYER, PlayerType.STEREO_PAIR, PlayerType.MULTI_CHANNEL):
         return False
     leader_own = snapshot.own(target)
     return _follows_beside(snapshot, member, leader_own.domain if leader_own else None)
