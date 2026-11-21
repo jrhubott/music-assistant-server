@@ -78,6 +78,7 @@ CONF_BOOST_BADGE_COLOR = "boost_badge_color"
 CONF_PARTY_KARAOKE_MODE = "karaoke_mode"
 CONF_PARTY_HIGHLIGHT_AHEAD = "highlight_ahead"
 CONF_PARTY_LYRICS_DELAY = "lyrics_delay"
+CONF_PARTY_WORD_HIGHLIGHT = "word_highlight"
 # Anti burn-in
 CONF_ANTI_BURN_IN = "anti_burn_in"
 # Custom party settings
@@ -184,6 +185,7 @@ class PartyConfig(DataClassDictMixin):
     highlight_ahead: bool
     # Milliseconds the dashboard lyrics are held back to match speakers that play late
     lyrics_delay: int
+    word_highlight: bool
     # Badge colors (hex values)
     request_badge_color: str
     boost_badge_color: str
@@ -325,6 +327,13 @@ class PartyPlugin(PluginProvider):
                 type=ConfigEntryType.INTEGER,
                 default_value=0,
                 range=(-5000, 5000),
+                depends_on=CONF_PARTY_KARAOKE_MODE,
+                category="karaoke",
+            ),
+            ConfigEntry(
+                key=CONF_PARTY_WORD_HIGHLIGHT,
+                type=ConfigEntryType.BOOLEAN,
+                default_value=True,
                 depends_on=CONF_PARTY_KARAOKE_MODE,
                 category="karaoke",
             ),
@@ -728,6 +737,7 @@ class PartyPlugin(PluginProvider):
             karaoke_mode=cast("bool", self.config.get_value(CONF_PARTY_KARAOKE_MODE)),
             highlight_ahead=cast("bool", self.config.get_value(CONF_PARTY_HIGHLIGHT_AHEAD)),
             lyrics_delay=cast("int", self.config.get_value(CONF_PARTY_LYRICS_DELAY)),
+            word_highlight=cast("bool", self.config.get_value(CONF_PARTY_WORD_HIGHLIGHT)),
             request_badge_color=cast("str", self.config.get_value(CONF_REQUEST_BADGE_COLOR)),
             boost_badge_color=cast("str", self.config.get_value(CONF_BOOST_BADGE_COLOR)),
             anti_burn_in=cast("bool", self.config.get_value(CONF_ANTI_BURN_IN)),

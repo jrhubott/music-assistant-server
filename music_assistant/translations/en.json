@@ -2269,6 +2269,8 @@
   "provider.party.config_entries.skip_song_refill_minutes.label": "Skip Song Refill Rate (minutes)",
   "provider.party.config_entries.skip_votes_required.description": "How many different guests must press 'Skip' before the currently playing song is skipped. Set to 1 to let a single guest skip a song. Votes reset when the next song starts.",
   "provider.party.config_entries.skip_votes_required.label": "Votes Required to Skip",
+  "provider.party.config_entries.word_highlight.description": "When enabled, each word of the current lyric line fills in as it is sung. When disabled, the whole line is highlighted at once.",
+  "provider.party.config_entries.word_highlight.label": "Highlight Lyrics Word by Word",
   "provider.party.manifest.description": "Enable guest access with a shareable URL for party, allowing guests to add songs to the queue with rate limiting.",
   "provider.phishin.manifest.description": "Stream live audience recordings and complete setlists from Phish’s archives.",
   "provider.phishin.media.folder.browse_by_tag.name": "Browse by Tag",
