@@ -34,6 +34,7 @@ from music_assistant_models.errors import (
     ProviderUnavailableError,
     ResourceBusyError,
     ResourceTemporarilyUnavailable,
+    RetriesExhausted,
 )
 from music_assistant_models.helpers import create_safe_string
 from music_assistant_models.media_items import (
@@ -1244,6 +1245,7 @@ class PlaylistController(MediaControllerBase[Playlist]):
                 )
             except (
                 ResourceTemporarilyUnavailable,
+                RetriesExhausted,
                 ProviderUnavailableError,
                 MediaNotFoundError,
                 ClientError,
@@ -1385,6 +1387,7 @@ class PlaylistController(MediaControllerBase[Playlist]):
             )
         except (
             ResourceTemporarilyUnavailable,
+            RetriesExhausted,
             ProviderUnavailableError,
             ClientError,
             OSError,
@@ -2315,7 +2318,7 @@ class PlaylistController(MediaControllerBase[Playlist]):
         """
         try:
             await provider.forget_playlist_tracks(prov_playlist_id)
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001 - provider code, the change itself already stands
             # the outcome of the change stands, only the kept copy may stay until it expires
             self.logger.warning(
                 "Provider %s could not forget the tracks it kept of playlist %s: %s",
