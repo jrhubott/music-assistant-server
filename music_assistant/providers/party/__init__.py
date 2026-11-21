@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 from mashumaro import DataClassDictMixin
 from music_assistant_models.auth import Scope
 from music_assistant_models.config_entries import (
+    ConfigActionResult,
     ConfigEntry,
     ConfigValueOption,
     ProviderConfig,
@@ -28,6 +29,8 @@ from music_assistant.helpers import guest_access
 from music_assistant.helpers.config_entries import PLAYBACK_TARGET_TYPES
 from music_assistant.helpers.shared_playback import SharedPlaybackMode, SharedPlaybackSession
 from music_assistant.models.plugin import PluginProvider
+
+from .kiosk import build_kiosk_url, create_kiosk_code, get_kiosk_code, revoke_kiosk_access
 
 if TYPE_CHECKING:
     from music_assistant_models.provider import ProviderManifest
@@ -69,6 +72,11 @@ CONF_PARTY_DURATION = "party_duration"
 CONF_HIDE_BACK_BUTTON = "hide_back_button"
 CONF_SHOW_PROGRESS_BAR = "show_progress_bar"
 CONF_PREVENT_DUPLICATE_TRACKS = "prevent_duplicate_tracks"
+
+ACTION_CREATE_KIOSK_LINK = "create_kiosk_link"
+ACTION_REPLACE_KIOSK_LINK = "replace_kiosk_link"
+ACTION_REVOKE_KIOSK_LINK = "revoke_kiosk_link"
+KIOSK_CATEGORY = "tv_link"
 
 # Color options for badges (name, hex value)
 # Green and Orange are listed first as they are the defaults
@@ -150,6 +158,7 @@ class PartyPlugin(PluginProvider):
     async def get_config_entries(self) -> tuple[ConfigEntry, ...]:
         """Return Config entries to configure this provider."""
         guest_access_enabled = bool(self.get_config_value(CONF_ENABLE_GUEST_ACCESS, False))
+        kiosk_url = await self._get_kiosk_url()
 
         return (
             ConfigEntry(
@@ -372,7 +381,25 @@ class PartyPlugin(PluginProvider):
                 ],
                 advanced=True,
             ),
+            *self._kiosk_config_entries(kiosk_url),
         )
+
+    async def handle_config_action(
+        self, action: str
+    ) -> tuple[ConfigEntry, ...] | ConfigActionResult | None:
+        """
+        Create, replace or revoke the TV link and re-render the entries.
+
+        :param action: The action id of the pressed button.
+        """
+        if action in (ACTION_CREATE_KIOSK_LINK, ACTION_REPLACE_KIOSK_LINK):
+            await create_kiosk_code(self.mass)
+            self.logger.info("Created a new TV link for the party dashboard")
+        elif action == ACTION_REVOKE_KIOSK_LINK:
+            await self._revoke_kiosk_link()
+        else:
+            return await super().handle_config_action(action)
+        return await self.get_config_entries()
 
     def __init__(
         self,
@@ -483,6 +510,12 @@ class PartyPlugin(PluginProvider):
         ):
             self.logger.debug("Revoking guest tokens...")
             await self._revoke_guest_tokens()
+        # the TV link outlives guest access (it signs in as the dashboard viewer, not a guest),
+        # but not the plugin itself
+        if is_removed or not self.mass.config.get_raw_provider_config_value(
+            self.instance_id, CONF_ENABLED, default=True
+        ):
+            await self._revoke_kiosk_link()
 
         await super().unload(is_removed)
 
@@ -1034,3 +1067,63 @@ class PartyPlugin(PluginProvider):
                 tokens_revoked,
                 PARTY_GUEST_USER,
             )
+
+    async def _get_kiosk_url(self) -> str | None:
+        """Return the URL of the active TV link, or None when there is none."""
+        if code := await get_kiosk_code(self.mass):
+            return build_kiosk_url(self.mass, code)
+        return None
+
+    async def _revoke_kiosk_link(self) -> None:
+        """Revoke the TV link and sign out the screens that use it."""
+        if await revoke_kiosk_access(self.mass):
+            self.logger.info("Revoked the TV link for the party dashboard")
+
+    def _kiosk_config_entries(self, kiosk_url: str | None) -> tuple[ConfigEntry, ...]:
+        """
+        Return the entries that show and manage the TV link.
+
+        :param kiosk_url: URL of the active TV link, or None when there is none.
+        """
+        has_link = kiosk_url is not None
+        return (
+            ConfigEntry(
+                key="kiosk_link_note",
+                type=ConfigEntryType.LABEL,
+                required=False,
+                category=KIOSK_CATEGORY,
+                hidden=has_link,
+            ),
+            ConfigEntry(
+                key="kiosk_link_url",
+                type=ConfigEntryType.LABEL,
+                required=False,
+                translation_params=[kiosk_url or ""],
+                category=KIOSK_CATEGORY,
+                hidden=not has_link,
+            ),
+            ConfigEntry(
+                key=ACTION_CREATE_KIOSK_LINK,
+                type=ConfigEntryType.ACTION,
+                required=False,
+                action=ACTION_CREATE_KIOSK_LINK,
+                category=KIOSK_CATEGORY,
+                hidden=has_link,
+            ),
+            ConfigEntry(
+                key=ACTION_REPLACE_KIOSK_LINK,
+                type=ConfigEntryType.ACTION,
+                required=False,
+                action=ACTION_REPLACE_KIOSK_LINK,
+                category=KIOSK_CATEGORY,
+                hidden=not has_link,
+            ),
+            ConfigEntry(
+                key=ACTION_REVOKE_KIOSK_LINK,
+                type=ConfigEntryType.ACTION,
+                required=False,
+                action=ACTION_REVOKE_KIOSK_LINK,
+                category=KIOSK_CATEGORY,
+                hidden=not has_link,
+            ),
+        )
