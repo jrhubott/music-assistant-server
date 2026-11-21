@@ -37,6 +37,7 @@ from music_assistant.providers.party import (
     CONF_PARTY_SKIP_VOTES_REQUIRED,
     CONF_PARTY_WORD_HIGHLIGHT,
     CONF_PREVENT_DUPLICATE_TRACKS,
+    CONF_REQUIRE_LYRICS,
     PartyPlugin,
 )
 
@@ -50,11 +51,16 @@ def _create_party_plugin() -> PartyPlugin:
     plugin.logger = MagicMock()
     plugin.config = MagicMock()
     plugin._queue_lock = asyncio.Lock()
+    plugin._guest_key_salt = "salt"
+    plugin._host_voters = set()
+    plugin._blocked_guests = set()
+    plugin._host_failures = {}
     plugin._session = None
     plugin._session_lock = asyncio.Lock()
     plugin.get_party_player = AsyncMock(return_value="party_queue")  # type: ignore[method-assign]
     config_values = {
         CONF_ENABLE_GUEST_ACCESS: True,
+        CONF_REQUIRE_LYRICS: False,
         CONF_ENABLE_BOOST: True,
         CONF_ENABLE_ADD_QUEUE: True,
         CONF_PREVENT_DUPLICATE_TRACKS: True,
@@ -107,9 +113,12 @@ def _create_skip_vote_plugin(votes_required: int) -> tuple[PartyPlugin, MagicMoc
     plugin.mass.player_queues.next = AsyncMock()
     plugin.logger = MagicMock()
     plugin.config = MagicMock()
+    plugin._guest_key_salt = "salt"
+    plugin._blocked_guests = set()
     plugin.get_party_player = AsyncMock(return_value="party_queue")  # type: ignore[method-assign]
     config_values = {
         CONF_ENABLE_GUEST_ACCESS: True,
+        CONF_REQUIRE_LYRICS: False,
         CONF_ENABLE_SKIP_SONG: True,
         CONF_PARTY_SKIP_VOTES_REQUIRED: votes_required,
     }
@@ -548,6 +557,7 @@ async def test_get_party_url_passes_configured_expiry(expiry: int) -> None:
     plugin = _create_party_plugin()
     cast("MagicMock", plugin.config.get_value).side_effect = {
         CONF_ENABLE_GUEST_ACCESS: True,
+        CONF_REQUIRE_LYRICS: False,
         CONF_PARTY_DURATION: expiry,
     }.get
 

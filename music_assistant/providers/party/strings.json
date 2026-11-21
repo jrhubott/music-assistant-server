@@ -132,6 +132,22 @@
       "label": "Allow Reactions",
       "description": "Let guests send emoji reactions from their phone. Reactions float up the party screen."
     },
+    "enable_fair_queue": {
+      "label": "Fair Queue",
+      "description": "Guests take turns, so one person can't line up several songs in a row. Boosted songs still play first."
+    },
+    "require_lyrics": {
+      "label": "Only Songs With Lyrics",
+      "description": "Refuse guest requests for songs without lyrics, remove them when they are next in the queue, and skip them if they start playing. Needs a lyrics provider. Instrumental songs count as having no lyrics."
+    },
+    "enable_host_controls": {
+      "label": "Enable Host Controls",
+      "description": "Let someone with the host PIN remove requests, mute shout-outs and block devices from the guest page. This keeps order at the party, but is not a security boundary against a guest using the API directly."
+    },
+    "host_pin": {
+      "label": "Host PIN",
+      "description": "At least 6 characters. Host controls stay off until this is set. Avoid a PIN you use elsewhere."
+    },
     "show_leaderboard": {
       "label": "Show DJ Leaderboard",
       "description": "Now and then show the guests that requested and boosted the most songs on the party screen. Needs guest nicknames."

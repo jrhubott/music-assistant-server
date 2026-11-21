@@ -50,6 +50,10 @@ def _create_plugin(**overrides: Any) -> PartyPlugin:
     plugin.logger = MagicMock()
     plugin.config = MagicMock()
     plugin._queue_lock = asyncio.Lock()
+    plugin._guest_key_salt = "salt"
+    plugin._host_voters = set()
+    plugin._blocked_guests = set()
+    plugin._host_failures = {}
     plugin._session = None
     plugin._session_lock = asyncio.Lock()
     plugin._guest_stats = {}
