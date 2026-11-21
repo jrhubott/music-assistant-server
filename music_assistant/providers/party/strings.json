@@ -54,7 +54,7 @@
     },
     "anti_burn_in": {
       "label": "Enable Anti Burn-in",
-      "description": "Periodically swap the QR code and track list sides to prevent burn-in on OLED or plasma displays. Sides swap every 10 minutes."
+      "description": "Swap the QR code and track list sides to prevent burn-in on OLED or plasma displays. Sides swap at the first song change after 10 minutes, never during a song."
     },
     "enable_rate_limiting": {
       "label": "Enable Rate Limiting",
