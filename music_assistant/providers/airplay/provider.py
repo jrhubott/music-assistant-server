@@ -89,6 +89,8 @@ if TYPE_CHECKING:
 
     from music_assistant_models.config_entries import ProviderConfig
 
+    from .wake import WakeOutcome
+
 # Marker the `cliairplay --ptp-daemon` process prints once it has bound the
 # privileged PTP ports (UDP 319/320) and opened its control channel. Until this
 # line is seen the daemon is spawned but not yet able to serve shared-clock
@@ -345,6 +347,8 @@ class AirPlayProvider(PlayerProvider):
         # each pair: decided once and kept, as the records tell no roles.
         self._pair_records: dict[str, dict[str, AsyncServiceInfo]] = {}
         self._pair_carriers: dict[str, str] = {}
+        # The wakes that are running, by the protocol id of their receiver (see wake.py)
+        self.wake_tasks: dict[str, asyncio.Task[WakeOutcome]] = {}
         # Shared audible instants for in-flight announcements, keyed by
         # (group-or-leader player id, render key) -> unix ms. The controller
         # forwards a group-entity announcement to every member concurrently;
@@ -457,6 +461,10 @@ class AirPlayProvider(PlayerProvider):
 
     async def unload(self, is_removed: bool = False) -> None:
         """Handle unload/close of the provider."""
+        if wake_tasks := list(getattr(self, "wake_tasks", {}).values()):
+            for task in wake_tasks:
+                task.cancel()
+            await asyncio.gather(*wake_tasks, return_exceptions=True)
         # Unregister all dashboard endpoints
         dashboards = getattr(self, "dashboards", None)
         if dashboards:
