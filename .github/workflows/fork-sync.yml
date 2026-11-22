@@ -4,6 +4,8 @@ on:
   schedule:
     # after the 03:45 UTC nightly tag; jrhubott/ha-apps checks edge and stable hourly and builds them
     - cron: "30 5 * * *"
+    # picks up pushes to the listed feature branches, on the upstream commit edge already has
+    - cron: "47 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -15,6 +17,10 @@ on:
         type: choice
         options: [all, edge, stable]
         default: all
+      features_only:
+        description: "Edge: apply feature changes without taking newer upstream"
+        type: boolean
+        default: false
 
 concurrency:
   group: fork-sync
@@ -51,7 +57,7 @@ jobs:
       fail-fast: false
       matrix:
         # a scheduled run (no inputs) and "all" sync both branches
-        target: ${{ fromJSON((inputs.target == '' || inputs.target == 'all') && '["edge","stable"]' || format('["{0}"]', inputs.target)) }}
+        target: ${{ fromJSON(github.event.schedule == '47 * * * *' && '["edge"]' || ((inputs.target == '' || inputs.target == 'all') && '["edge","stable"]' || format('["{0}"]', inputs.target))) }}
     name: sync (${{ matrix.target }})
     runs-on: ubuntu-latest
     container: ghcr.io/music-assistant/base:${{ needs.base-image.outputs[matrix.target] }}
@@ -83,4 +89,5 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 tools/fork_sync.py --config tools/fork-sync.json --repo-dir repo \
-            --target ${{ matrix.target }} ${{ inputs.dry_run && '--dry-run' || '' }}
+            --target ${{ matrix.target }} ${{ inputs.dry_run && '--dry-run' || '' }} \
+            ${{ (github.event.schedule == '47 * * * *' || inputs.features_only) && '--features-only' || '' }}

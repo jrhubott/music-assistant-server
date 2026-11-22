@@ -5,6 +5,10 @@
     {
       "edge_branch": "edge",
       "base_branch": "dev",
+      "strategy": "rebuild",
+      "generated": {
+        "music_assistant/translations/en.json": "uv run --no-project --with orjson python scripts/build_translations.py"
+      },
       "features": [
         "fix/dlna-sonos-zone",
         "feature/party-kiosk-link",
