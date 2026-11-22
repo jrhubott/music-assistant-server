@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
+from unittest.mock import MagicMock
 
 import pytest
 from aiosendspin.models.visualizer import BeatTiming
@@ -314,3 +315,195 @@ def test_seek_resets_party_state() -> None:
     analyzer.clear_beats()
     assert analyzer._party._beat_index == -1
     assert not analyzer._party._future
+
+
+def _engine_at(section: _Section, light_range: str = "balanced", count: int = 5) -> PartyEngine:
+    """Return an engine that holds a steady song section."""
+    engine = PartyEngine(_row(count), rng=random.Random(3), light_range=light_range)  # noqa: S311
+    engine._update_section = MagicMock()  # type: ignore[method-assign]
+    engine._section = section
+    engine._steady = section
+    return engine
+
+
+def _beat_at(now_us: int, interval_us: int = 500_000) -> BeatEvent:
+    """Return the 4/4 beat playing at ``now_us``."""
+    index = now_us // interval_us
+    return BeatEvent(index * interval_us, index % 4 == 0, interval_us)
+
+
+def _lowest_level(engine: PartyEngine, start_us: int, ticks: int = 60) -> float:
+    """Return the dimmest any light gets while rendering Party Auto."""
+    lowest = 1.0
+    for tick in range(ticks):
+        now = start_us + tick * _TICK_US
+        colors = engine.render("party_auto", now, _PALETTE, [], _beat_at(now), None)
+        lowest = min(lowest, *(_level(color) for color in colors))
+    return lowest
+
+
+def test_peaks_stay_brighter_than_breakdowns() -> None:
+    """Loud sections keep a high floor while breakdowns can go properly dark."""
+    peak = _lowest_level(_engine_at(_Section.PEAK), 1_000_000)
+    breakdown = _lowest_level(_engine_at(_Section.BREAKDOWN), 1_000_000)
+    assert peak >= 0.5 * 0.85 - 1e-6
+    assert breakdown <= 0.1
+
+
+@pytest.mark.parametrize("section", [_Section.GROOVE, _Section.PEAK])
+def test_light_range_orders_brightness(section: _Section) -> None:
+    """Moody runs darker than Balanced, and Balanced darker than Bright."""
+    levels = [
+        _lowest_level(_engine_at(section, light_range), 1_000_000)
+        for light_range in ("moody", "balanced", "bright")
+    ]
+    assert levels[0] < levels[1] < levels[2]
+
+
+def test_unknown_light_range_is_balanced() -> None:
+    """A stored value from another version falls back to Balanced."""
+    assert _lowest_level(_engine_at(_Section.PEAK, "other"), 1_000_000) == pytest.approx(
+        _lowest_level(_engine_at(_Section.PEAK), 1_000_000)
+    )
+
+
+def test_groove_alternates_bright_and_dark_phrases() -> None:
+    """Even eight-bar phrases hold a higher floor than odd ones."""
+    bright = _engine_at(_Section.GROOVE)
+    bright._bar = 0
+    dark = _engine_at(_Section.GROOVE)
+    dark._bar = 8
+    colors = [(0.01, 0.01, 0.01)]
+    assert _level(bright._apply_steady_levels(0, colors)[0]) > _level(
+        dark._apply_steady_levels(0, colors)[0]
+    )
+
+
+def test_blinder_fires_on_the_first_beat_of_a_long_phrase() -> None:
+    """Bar 16 opens with a white burst that bar 15 does not have."""
+    colors = [(0.85, 0.0, 0.0)]
+    engine = _engine_at(_Section.PEAK)
+    engine._beat_us = 0
+    engine._bar_beat = 0
+    engine._bar = 15
+    assert engine._apply_steady_levels(0, colors)[0][1] == 0.0
+    engine._bar = 16
+    assert engine._apply_steady_levels(0, colors)[0][1] > 0.5
+
+
+def test_drop_holds_the_room_in_a_contrasting_color() -> None:
+    """Two beats after the hit every light shows the color farthest from the old one."""
+    engine = PartyEngine(_row(5))
+    engine._update_section = MagicMock()  # type: ignore[method-assign]
+    engine._section = _Section.DROP
+    engine._bar = 0
+    engine._beat_index = 0
+    engine._beat_us = 1_000_000
+    colors = engine._drop_look(2_000_000, _PALETTE)
+    assert all(color[2] > 0.6 and color[0] < 0.05 for color in colors)
+    engine._beat_us = 6_000_000
+    eased = engine._drop_look(6_000_000, _PALETTE)
+    assert len({round(_level(color), 3) for color in eased}) > 1
+
+
+def test_build_rolls_faster_through_the_last_bar() -> None:
+    """The chase takes four steps per beat in the bar before the drop."""
+    engine = PartyEngine(_row(5))
+    engine._beat_index = 0
+    engine._beat_us = 10_000_000
+    engine._build_start_us = 0
+    engine._drop_at_us = 11_500_000
+    heads = set()
+    for offset in (0, 130_000, 260_000, 390_000):
+        now = 10_000_000 + offset
+        colors = engine._build_look(now, _PALETTE)
+        heads.add(max(range(5), key=lambda i: _level(colors[i])))
+    assert len(heads) == 4
+
+
+def test_a_jump_that_does_not_last_is_canceled() -> None:
+    """A half-second burst is dropped once the audio after it is visible."""
+
+    def burst(timestamp_us: int) -> float:
+        loud = 30_000_000 <= timestamp_us < 30_500_000
+        return _with_kicks(0.9 if loud else 0.35, timestamp_us)
+
+    drop_us, _ = _first_drop_us(burst, 34_000_000, lookahead_us=1_000_000)
+    assert drop_us is None
+
+
+def test_a_new_track_opening_is_not_a_drop() -> None:
+    """The jump into a louder song at a track change does not fire a drop."""
+    engine = PartyEngine(_row(3))
+    engine.mark_track_start(20_000_000)
+    assert engine._is_track_opening(20_000_000)
+    assert engine._is_track_opening(19_500_000)
+    assert not engine._is_track_opening(24_000_000)
+
+
+def test_track_change_keeps_the_energy_of_a_drop() -> None:
+    """A track change during a drop continues in the peak look instead of going calm."""
+    engine = PartyEngine(_row(3))
+    engine._section = _Section.DROP
+    engine.clear_schedule()
+    assert engine._section is _Section.PEAK
+    assert engine._steady is _Section.PEAK
+
+
+def test_first_beats_of_a_track_mark_its_start() -> None:
+    """Only the first schedule segment after a clear sets the track start."""
+    analyzer = HueAudioAnalyzer(_row(2), color_mode="party_auto")
+    analyzer.push_beats(_beats(4))
+    analyzer.push_beats([BeatTiming(timestamp_us=9_000_000, is_downbeat=True)])
+    assert analyzer._party._track_start_us == 0
+
+
+def test_light_range_updates_live() -> None:
+    """Changing the setting reaches the engine without a restart."""
+    analyzer = HueAudioAnalyzer(_row(2), color_mode="party_auto")
+    analyzer.update_settings(light_range="bright")
+    assert analyzer._party._profile.peak == pytest.approx(0.65)
+
+
+@pytest.mark.parametrize(("full_white", "expected"), [(False, 0.85), (True, 1.0)])
+def test_full_white_sets_the_level_of_the_drop_flash(full_white: bool, expected: float) -> None:
+    """The white flash on a drop reaches the chosen level, in white."""
+    engine = PartyEngine(_row(3), full_white=full_white)
+    engine._drop_start_us = 1_000_000
+    engine._beat_us = 1_000_000
+    colors = engine._drop_look(1_000_000, _PALETTE)
+    assert all(color == pytest.approx((expected, expected, expected)) for color in colors)
+
+
+def test_full_white_reaches_the_blinder() -> None:
+    """A blinder goes past the color limit only with the option on."""
+    colors = [(0.85, 0.85, 0.85)]
+    engine = _engine_at(_Section.PEAK)
+    engine._beat_us = 0
+    engine._bar_beat = 0
+    engine._bar = 16
+    assert _level(engine._apply_steady_levels(0, colors)[0]) == pytest.approx(0.85)
+    engine.set_full_white(True)
+    assert _level(engine._apply_steady_levels(0, colors)[0]) > 0.95
+
+
+@pytest.mark.parametrize("mode", [mode for mode in PARTY_MODES if mode != "party_auto"])
+def test_full_white_leaves_other_party_modes_alone(mode: str) -> None:
+    """Only Party Auto uses the full-power white."""
+    outputs = []
+    for full_white in (False, True):
+        engine = PartyEngine(_row(3), rng=random.Random(4), full_white=full_white)  # noqa: S311
+        outputs.append(
+            [
+                engine.render(mode, tick * _TICK_US, _PALETTE, [], _beat_at(tick * _TICK_US), None)
+                for tick in range(120)
+            ]
+        )
+    assert outputs[0] == outputs[1]
+
+
+def test_full_white_updates_live() -> None:
+    """Changing the setting reaches the engine without a restart."""
+    analyzer = HueAudioAnalyzer(_row(2), color_mode="party_auto")
+    analyzer.update_settings(full_white=True)
+    assert max(analyzer._party._hit_white) == 1.0

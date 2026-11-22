@@ -16,6 +16,8 @@ CONF_CLIENTKEY: Final[str] = "hue_clientkey"
 CONF_BRIGHTNESS: Final[str] = "brightness"
 CONF_COLOR_MODE: Final[str] = "color_mode"
 CONF_HUE_LATENCY_MS: Final[str] = "hue_latency_ms"
+CONF_PARTY_LIGHT_RANGE: Final[str] = "party_light_range"
+CONF_PARTY_FULL_WHITE: Final[str] = "party_full_white"
 
 # Where the lights are streamed to; an instance without a stored backend uses the Hue bridge.
 BACKEND_HUE_BRIDGE: Final[str] = "hue_bridge"
@@ -35,6 +37,10 @@ PARTY_MODES: Final[tuple[str, ...]] = (
 )
 COLOR_MODES: Final[tuple[str, ...]] = ("smooth", "ambient", "flashing", "energetic", *PARTY_MODES)
 DEFAULT_COLOR_MODE: Final[str] = COLOR_MODES[0]
+
+PARTY_LIGHT_RANGES: Final[tuple[str, ...]] = ("moody", "balanced", "bright")
+DEFAULT_PARTY_LIGHT_RANGE: Final[str] = "balanced"
+DEFAULT_PARTY_FULL_WHITE: Final[bool] = False
 
 DEFAULT_BRIGHTNESS: Final[int] = 100
 

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from hue_entertainment import LightColorCommand
 
-from .constants import PARTY_MODES
+from .constants import DEFAULT_PARTY_FULL_WHITE, DEFAULT_PARTY_LIGHT_RANGE, PARTY_MODES
 from .party_modes import BeatEvent, PartyEngine
 
 if TYPE_CHECKING:
@@ -284,12 +284,16 @@ class HueAudioAnalyzer:
         channels: list[LightChannel],
         color_mode: str = DEFAULT_MODE,
         brightness: int = 100,
+        light_range: str = DEFAULT_PARTY_LIGHT_RANGE,
+        full_white: bool = DEFAULT_PARTY_FULL_WHITE,
     ) -> None:
         """
         Initialize the analyzer.
 
         ``color_mode`` selects a preset bundle from `_MODES` (defaults to
         `DEFAULT_MODE` when unknown); reactivity is governed by that preset.
+        ``light_range`` sets how bright Party Auto runs, and ``full_white`` runs its
+        white flashes and blinders at full power.
         """
         self._channels = channels
         self._color_mode = color_mode
@@ -330,7 +334,7 @@ class HueAudioAnalyzer:
         self._peak_boost: float = 0.0
         self._peak_set_at_us: int | None = None
         self._last_peak_us: int | None = None
-        self._party = PartyEngine(channels)
+        self._party = PartyEngine(channels, light_range=light_range, full_white=full_white)
 
         # Peak-driven palette walker. Used only when no beat schedule is
         # active; each consumed onset advances the position by one palette
@@ -346,8 +350,14 @@ class HueAudioAnalyzer:
         self,
         color_mode: str | None = None,
         brightness: int | None = None,
+        light_range: str | None = None,
+        full_white: bool | None = None,
     ) -> None:
         """Update settings without reset."""
+        if light_range is not None:
+            self._party.set_light_range(light_range)
+        if full_white is not None:
+            self._party.set_full_white(full_white)
         if color_mode is not None:
             entering_party = color_mode in PARTY_MODES and self._color_mode not in PARTY_MODES
             self._color_mode = color_mode
@@ -403,6 +413,8 @@ class HueAudioAnalyzer:
         be forced to wrap backwards at every bar end, which reads as a flash.
         Keeping a continuous count gives a strictly forward palette sweep.
         """
+        if beats and self._last_beat_in_bar < 0:
+            self._party.mark_track_start(beats[0].timestamp_us)
         for beat in beats:
             bib = 0 if self._last_beat_in_bar < 0 else self._last_beat_in_bar + 1
             self._beats.append(

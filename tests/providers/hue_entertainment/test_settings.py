@@ -18,6 +18,8 @@ from music_assistant.providers.hue_entertainment.constants import (
     CONF_BRIGHTNESS,
     CONF_COLOR_MODE,
     CONF_HUE_LATENCY_MS,
+    CONF_PARTY_FULL_WHITE,
+    CONF_PARTY_LIGHT_RANGE,
     DEFAULT_BRIGHTNESS,
     DEFAULT_COLOR_MODE,
     DEFAULT_HUE_LATENCY_MS,
@@ -26,6 +28,8 @@ from music_assistant.providers.hue_entertainment.settings import (
     get_brightness,
     get_color_mode,
     get_hue_latency_ms,
+    get_party_full_white,
+    get_party_light_range,
 )
 
 
@@ -83,3 +87,21 @@ def test_unset_setting_falls_back_to_default(
 ) -> None:
     """An unconfigured setting yields the default."""
     assert reader(_config()) == default
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [("bright", "bright"), ("moody", "moody"), ("removed", "balanced"), (None, "balanced")],
+)
+def test_get_party_light_range(stored: str | None, expected: str) -> None:
+    """A missing or unknown light range reads as Balanced."""
+    assert get_party_light_range(_config(**{CONF_PARTY_LIGHT_RANGE: stored})) == expected
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [(True, True), (False, False), ("true", True), ("false", False), (None, False)],
+)
+def test_get_party_full_white(stored: ConfigValueType, expected: bool) -> None:
+    """Full-power white is off unless it was turned on."""
+    assert get_party_full_white(_config(**{CONF_PARTY_FULL_WHITE: stored})) is expected

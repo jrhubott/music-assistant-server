@@ -68,6 +68,24 @@
         "warm_up": "Slow, soft colour movement for arrivals and dinner, with no flashing."
       }
     },
+    "party_light_range": {
+      "label": "Party Auto light range",
+      "description": "How bright Party Auto runs between its big moments.",
+      "options": {
+        "moody": "Moody",
+        "balanced": "Balanced",
+        "bright": "Bright"
+      },
+      "option_descriptions": {
+        "moody": "Darker rooms with strong contrast on the hits.",
+        "balanced": "Bright loud sections and dark breakdowns (default).",
+        "bright": "Keeps the room lit, with darkness only in the quietest moments."
+      }
+    },
+    "party_full_white": {
+      "label": "Full-power white hits",
+      "description": "Run Party Auto's white flashes and blinders at 100% instead of 85%. Colors stay at 85% to keep them accurate."
+    },
     "hue_latency_ms": {
       "label": "Light latency (ms)",
       "description": "Milliseconds to render light updates ahead of the audio, to offset the delay of the Hue bridge or the Zigbee network. Increase if the lights lag the music, decrease if they run ahead of it."

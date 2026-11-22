@@ -25,6 +25,8 @@ from music_assistant.providers.hue_entertainment.constants import (
     CONF_BRIGHTNESS,
     CONF_COLOR_MODE,
     CONF_HUE_LATENCY_MS,
+    CONF_PARTY_FULL_WHITE,
+    CONF_PARTY_LIGHT_RANGE,
 )
 from music_assistant.providers.hue_entertainment.provider import HueEntertainmentProvider
 
@@ -79,12 +81,14 @@ async def test_settings_change_applies_in_place() -> None:
     [
         ({CONF_COLOR_MODE: "ambient"}, {"color_mode": "ambient"}),
         ({CONF_HUE_LATENCY_MS: 120}, {"hue_latency_ms": 120}),
+        ({CONF_PARTY_LIGHT_RANGE: "bright"}, {"light_range": "bright"}),
+        ({CONF_PARTY_FULL_WHITE: True}, {"full_white": True}),
         (
             {CONF_BRIGHTNESS: 0, CONF_COLOR_MODE: "ambient", CONF_HUE_LATENCY_MS: 0},
             {"brightness": 0, "color_mode": "ambient", "hue_latency_ms": 0},
         ),
     ],
-    ids=["color_mode", "latency", "all_settings_at_zero"],
+    ids=["color_mode", "latency", "light_range", "full_white", "all_settings_at_zero"],
 )
 async def test_every_in_place_setting_skips_the_reload(
     update: dict[str, ConfigValueType], expected: dict[str, ConfigValueType]

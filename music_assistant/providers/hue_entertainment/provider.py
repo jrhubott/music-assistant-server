@@ -29,14 +29,25 @@ from .constants import (
     CONF_BRIGHTNESS,
     CONF_COLOR_MODE,
     CONF_HUE_LATENCY_MS,
+    CONF_PARTY_FULL_WHITE,
+    CONF_PARTY_LIGHT_RANGE,
     CONF_USERNAME,
     CONF_ZIGBEE_LIGHTS,
     CONF_ZIGBEE_NAME,
     DEFAULT_BRIGHTNESS,
     DEFAULT_COLOR_MODE,
     DEFAULT_HUE_LATENCY_MS,
+    DEFAULT_PARTY_FULL_WHITE,
+    DEFAULT_PARTY_LIGHT_RANGE,
+    PARTY_LIGHT_RANGES,
 )
-from .settings import get_brightness, get_color_mode, get_hue_latency_ms
+from .settings import (
+    get_brightness,
+    get_color_mode,
+    get_hue_latency_ms,
+    get_party_full_white,
+    get_party_light_range,
+)
 from .targets import HueAreaTarget, ZigbeeTarget
 
 if TYPE_CHECKING:
@@ -88,6 +99,26 @@ class HueEntertainmentProvider(PluginProvider):
                     ConfigValueOption(mode, title=mode.replace("_", " ").title())
                     for mode in COLOR_MODES
                 ],
+                category="settings",
+            ),
+            ConfigEntry(
+                key=CONF_PARTY_LIGHT_RANGE,
+                type=ConfigEntryType.STRING,
+                default_value=DEFAULT_PARTY_LIGHT_RANGE,
+                options=[
+                    ConfigValueOption(light_range, title=light_range.title())
+                    for light_range in PARTY_LIGHT_RANGES
+                ],
+                depends_on=CONF_COLOR_MODE,
+                depends_on_value="party_auto",
+                category="settings",
+            ),
+            ConfigEntry(
+                key=CONF_PARTY_FULL_WHITE,
+                type=ConfigEntryType.BOOLEAN,
+                default_value=DEFAULT_PARTY_FULL_WHITE,
+                depends_on=CONF_COLOR_MODE,
+                depends_on_value="party_auto",
                 category="settings",
             ),
             ConfigEntry(
@@ -234,13 +265,22 @@ class HueEntertainmentProvider(PluginProvider):
         # every changed key can be applied in place (anything else, including the
         # log level, still needs the base implementation).
         settings_keys = {
-            f"values/{key}" for key in (CONF_BRIGHTNESS, CONF_COLOR_MODE, CONF_HUE_LATENCY_MS)
+            f"values/{key}"
+            for key in (
+                CONF_BRIGHTNESS,
+                CONF_COLOR_MODE,
+                CONF_HUE_LATENCY_MS,
+                CONF_PARTY_FULL_WHITE,
+                CONF_PARTY_LIGHT_RANGE,
+            )
         }
         if changed_keys and changed_keys <= settings_keys and self._bridge_manager:
             self._bridge_manager.update_settings(
                 color_mode=get_color_mode(config),
                 brightness=get_brightness(config),
                 hue_latency_ms=get_hue_latency_ms(config),
+                light_range=get_party_light_range(config),
+                full_white=get_party_full_white(config),
             )
             self.config = config
             return
