@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -21,6 +21,7 @@ def _make_player(model: str, config_value: Any = None) -> SonosPlayer:
     """Create a SonosPlayer for the given model, with an optional stored rate selection."""
     player = SonosPlayer.__new__(SonosPlayer)
     player._attr_device_info = DeviceInfo(model=model, manufacturer="Sonos")
+    player.discovery_info = cast("Any", {"device": {"capabilities": []}})
     player._attr_supported_sample_rates = None
     player._cache = {}
     config = MagicMock()
