@@ -32,11 +32,15 @@ from music_assistant.providers.party import (
     CONF_ENABLE_GUEST_ACCESS,
     CONF_ENABLE_SKIP_SONG,
     CONF_PARTY_DURATION,
+    CONF_PARTY_KARAOKE_MODE,
+    CONF_PARTY_LYRICS_DELAY,
     CONF_PARTY_MODE,
     CONF_PARTY_PLAYER,
     CONF_PARTY_PLAYER_AUTO,
     CONF_PARTY_SKIP_VOTES_REQUIRED,
+    CONF_PARTY_WORD_HIGHLIGHT,
     CONF_PREVENT_DUPLICATE_TRACKS,
+    CONF_REQUIRE_LYRICS,
     PartyPlugin,
 )
 
@@ -50,11 +54,16 @@ def _create_party_plugin() -> PartyPlugin:
     plugin.logger = MagicMock()
     plugin.config = MagicMock()
     plugin._queue_lock = asyncio.Lock()
+    plugin._guest_key_salt = "salt"
+    plugin._host_voters = set()
+    plugin._blocked_guests = set()
+    plugin._host_failures = {}
     plugin._session = None
     plugin._session_lock = asyncio.Lock()
     plugin.get_party_player = AsyncMock(return_value="party_queue")  # type: ignore[method-assign]
     config_values = {
         CONF_ENABLE_GUEST_ACCESS: True,
+        CONF_REQUIRE_LYRICS: False,
         CONF_ENABLE_BOOST: True,
         CONF_ENABLE_ADD_QUEUE: True,
         CONF_PREVENT_DUPLICATE_TRACKS: True,
@@ -107,9 +116,12 @@ def _create_skip_vote_plugin(votes_required: int) -> tuple[PartyPlugin, MagicMoc
     plugin.mass.player_queues.next = AsyncMock()
     plugin.logger = MagicMock()
     plugin.config = MagicMock()
+    plugin._guest_key_salt = "salt"
+    plugin._blocked_guests = set()
     plugin.get_party_player = AsyncMock(return_value="party_queue")  # type: ignore[method-assign]
     config_values = {
         CONF_ENABLE_GUEST_ACCESS: True,
+        CONF_REQUIRE_LYRICS: False,
         CONF_ENABLE_SKIP_SONG: True,
         CONF_PARTY_SKIP_VOTES_REQUIRED: votes_required,
     }
@@ -470,6 +482,59 @@ async def test_get_party_config_exposes_mode(mode: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_party_config_exposes_lyrics_delay() -> None:
+    """get_party_config passes the karaoke lyrics delay to the dashboard."""
+    plugin = _create_party_plugin()
+    cast("MagicMock", plugin.config.get_value).side_effect = {CONF_PARTY_LYRICS_DELAY: -350}.get
+
+    config = await plugin.get_party_config()
+
+    assert config.lyrics_delay == -350
+
+
+@pytest.mark.asyncio
+async def test_get_config_entries_lyrics_delay_is_a_bounded_karaoke_option() -> None:
+    """The lyrics delay is an integer in milliseconds shown with the karaoke settings."""
+    plugin = _create_config_entries_plugin(guest_access_enabled=True)
+
+    entries = {entry.key: entry for entry in await plugin.get_config_entries()}
+
+    entry = entries[CONF_PARTY_LYRICS_DELAY]
+    assert entry.type == ConfigEntryType.INTEGER
+    assert entry.default_value == 0
+    assert entry.range == (-5000, 5000)
+    assert entry.category == "karaoke"
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.asyncio
+async def test_get_party_config_exposes_word_highlight(enabled: bool) -> None:
+    """get_party_config passes the word highlight choice to the dashboard."""
+    plugin = _create_party_plugin()
+    cast("MagicMock", plugin.config.get_value).side_effect = {
+        CONF_PARTY_WORD_HIGHLIGHT: enabled
+    }.get
+
+    config = await plugin.get_party_config()
+
+    assert config.word_highlight is enabled
+
+
+@pytest.mark.asyncio
+async def test_get_config_entries_word_highlight_defaults_on() -> None:
+    """Word highlighting is a karaoke option that starts enabled."""
+    plugin = _create_config_entries_plugin(guest_access_enabled=True)
+
+    entries = {entry.key: entry for entry in await plugin.get_config_entries()}
+
+    entry = entries[CONF_PARTY_WORD_HIGHLIGHT]
+    assert entry.type == ConfigEntryType.BOOLEAN
+    assert entry.default_value is True
+    assert entry.depends_on == CONF_PARTY_KARAOKE_MODE
+    assert entry.category == "karaoke"
+
+
+@pytest.mark.asyncio
 async def test_guest_readable_commands_use_guest_scope() -> None:
     """party/url and party/config stay on a guest-readable scope, never a host-only one."""
     plugin = _create_party_plugin()
@@ -495,6 +560,7 @@ async def test_get_party_url_passes_configured_expiry(expiry: int) -> None:
     plugin = _create_party_plugin()
     cast("MagicMock", plugin.config.get_value).side_effect = {
         CONF_ENABLE_GUEST_ACCESS: True,
+        CONF_REQUIRE_LYRICS: False,
         CONF_PARTY_DURATION: expiry,
     }.get
 
