@@ -83,7 +83,7 @@ jobs:
           test -n "$FORK_SYNC_DEPLOY_KEY" || { echo "::error::Add the FORK_SYNC_DEPLOY_KEY repository secret"; exit 1; }
           git clone -q "https://x-access-token:${SYNC_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
           git -C repo remote add upstream https://github.com/music-assistant/server.git
-          # the edge ruleset lets only this deploy key update edge
+          # sync results are pushed with this deploy key
           key="$RUNNER_TEMP/fork_sync_key"
           hosts="$RUNNER_TEMP/fork_sync_hosts"
           (umask 077; printf '%s\n' "$FORK_SYNC_DEPLOY_KEY" > "$key")
