@@ -64,7 +64,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Install build tools
-        run: apt-get update && apt-get install -y --no-install-recommends git build-essential ca-certificates
+        run: apt-get update && apt-get install -y --no-install-recommends git openssh-client build-essential ca-certificates
 
       - name: Check out the sync script
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -77,10 +77,20 @@ jobs:
       - name: Clone the fork
         env:
           SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          FORK_SYNC_DEPLOY_KEY: ${{ secrets.FORK_SYNC_DEPLOY_KEY }}
         run: |
           test -n "$SYNC_TOKEN" || { echo "::error::Add the SYNC_TOKEN repository secret"; exit 1; }
+          test -n "$FORK_SYNC_DEPLOY_KEY" || { echo "::error::Add the FORK_SYNC_DEPLOY_KEY repository secret"; exit 1; }
           git clone -q "https://x-access-token:${SYNC_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
           git -C repo remote add upstream https://github.com/music-assistant/server.git
+          # the edge ruleset lets only this deploy key update edge
+          key="$RUNNER_TEMP/fork_sync_key"
+          hosts="$RUNNER_TEMP/fork_sync_hosts"
+          (umask 077; printf '%s\n' "$FORK_SYNC_DEPLOY_KEY" > "$key")
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$hosts"
+          git -C repo config core.sshCommand "ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$hosts -o StrictHostKeyChecking=yes"
+          git -C repo remote set-url --push origin "git@github.com:${GITHUB_REPOSITORY}.git"
+          git -C repo ls-remote "git@github.com:${GITHUB_REPOSITORY}.git" refs/heads/edge > /dev/null
 
       - name: Sync
         id: sync
