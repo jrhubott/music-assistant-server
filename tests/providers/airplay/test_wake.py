@@ -269,7 +269,9 @@ async def test_unload_cancels_a_running_wake(tmp_path: Path) -> None:
         unloading._dacp_info = None
         unloading._ptp_daemon = None
         unloading._ptp_daemon_ready = None
+        unloading._ptp_daemon_restart_task = None
         unloading._ptp_daemon_stdout_task = None
+        unloading._unsub_timeline_rate = None
         unloading.dashboards = None
         unloading._bridge_manager = None
         async with asyncio.timeout(10):
