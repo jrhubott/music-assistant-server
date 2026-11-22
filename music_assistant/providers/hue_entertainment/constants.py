@@ -23,7 +23,17 @@ BACKEND_ZHA: Final[str] = "zha"
 
 # Visualization modes; first entry is the default. Used to build the config
 # options and to migrate away orphaned stored values from older versions.
-COLOR_MODES: Final[tuple[str, ...]] = ("smooth", "ambient", "flashing", "energetic")
+PARTY_MODES: Final[tuple[str, ...]] = (
+    "party_auto",
+    "chase",
+    "shockwave",
+    "color_slam",
+    "two_tone",
+    "rhythm_section",
+    "confetti",
+    "warm_up",
+)
+COLOR_MODES: Final[tuple[str, ...]] = ("smooth", "ambient", "flashing", "energetic", *PARTY_MODES)
 DEFAULT_COLOR_MODE: Final[str] = COLOR_MODES[0]
 
 DEFAULT_BRIGHTNESS: Final[int] = 100
