@@ -8,6 +8,7 @@ single light at or below three flashes per second.
 
 from __future__ import annotations
 
+import itertools
 import math
 import random
 from collections import deque
@@ -52,11 +53,16 @@ _SILENCE: Final[float] = 0.03
 _CALM_RATIO: Final[float] = 0.75
 _PEAK_RATIO: Final[float] = 1.2
 _SECTION_HOLD_US: Final[int] = 4_000_000
-_DROP_RISE: Final[float] = 1.35
+# A drop is a sudden step: the audio just after a moment is this much louder than just before it.
+_DROP_STEP: Final[float] = 1.25
+_DROP_BEFORE_US: Final[int] = 500_000
+_DROP_AFTER_US: Final[int] = 1_000_000
+_DROP_BEFORE_MIN_FRAMES: Final[int] = 3
+_DROP_EDGE_FRAMES: Final[int] = 8
+# The new level must also clear what has been playing, so a short stop that returns is no drop.
+_DROP_OVER_SHORT: Final[float] = 1.15
 _DROP_OVER_LONG: Final[float] = 1.05
 _DROP_HORIZON_US: Final[int] = 6_000_000
-_DROP_BUCKET_US: Final[int] = 500_000
-_DROP_BUCKET_MIN_FRAMES: Final[int] = 3
 _DROP_SCAN_US: Final[int] = 250_000
 _DROP_BEATS: Final[int] = 16
 _DIP_MAX_US: Final[int] = 600_000
@@ -434,27 +440,19 @@ class PartyEngine:
         self._section = self._steady_section(now_us)
 
     def _scan_for_drop(self, now_us: int) -> None:
-        """Schedule a drop when the queued audio holds a jump in energy."""
+        """Schedule a drop when the queued audio holds a sudden step up in energy."""
         if (
             self._drop_at_us is not None
             or now_us < self._drop_until_us
             or self._energy_us is None
             or self._short_energy < _SILENCE
-            or self._short_energy > self._long_energy
         ):
             return
-        target = max(self._short_energy * _DROP_RISE, self._long_energy * _DROP_OVER_LONG)
-        buckets: dict[int, list[float]] = {}
-        for timestamp, energy in self._future:
-            if timestamp > now_us + _DROP_HORIZON_US:
-                break
-            buckets.setdefault((timestamp - now_us) // _DROP_BUCKET_US, []).append(energy)
-        for bucket in sorted(buckets):
-            values = buckets[bucket]
-            if len(values) >= _DROP_BUCKET_MIN_FRAMES and sum(values) / len(values) >= target:
-                self._drop_at_us = self._snap_to_beat(now_us + bucket * _DROP_BUCKET_US, now_us)
-                self._build_start_us = now_us
-                return
+        minimum = max(self._short_energy * _DROP_OVER_SHORT, self._long_energy * _DROP_OVER_LONG)
+        step_us = _find_energy_step(list(self._future), minimum, now_us + _DROP_HORIZON_US)
+        if step_us is not None:
+            self._drop_at_us = self._snap_to_beat(step_us, now_us)
+            self._build_start_us = now_us
 
     def _snap_to_beat(self, timestamp_us: int, now_us: int) -> int:
         """Return the beat on the current grid nearest to ``timestamp_us``."""
@@ -544,6 +542,45 @@ def _layout(channels: list[LightChannel]) -> tuple[list[int], list[float]]:
     if count == 1:
         return ranks, [0.0]
     return ranks, [abs(2.0 * rank / (count - 1) - 1.0) for rank in ranks]
+
+
+def _find_energy_step(frames: list[tuple[int, float]], minimum: float, last_us: int) -> int | None:
+    """
+    Return the time of the first sudden step up in energy, or None.
+
+    :param frames: Queued ``(timestamp, energy)`` frames in time order.
+    :param minimum: The level the audio after the step must reach.
+    :param last_us: The latest time a step may start.
+    """
+    totals = [0.0, *itertools.accumulate(energy for _, energy in frames)]
+    start = end = 0
+    best_ratio = 0.0
+    best_index = last_index = -1
+    for index, (timestamp, _) in enumerate(frames):
+        edge_end = index + _DROP_EDGE_FRAMES
+        if timestamp > last_us or edge_end > len(frames):
+            break
+        last_index = index
+        while frames[start][0] < timestamp - _DROP_BEFORE_US:
+            start += 1
+        while end < len(frames) and frames[end][0] < timestamp + _DROP_AFTER_US:
+            end += 1
+        end = max(end, edge_end)
+        before_count = index - start
+        if before_count < _DROP_BEFORE_MIN_FRAMES:
+            continue
+        before = (totals[index] - totals[start]) / before_count
+        edge = (totals[edge_end] - totals[index]) / _DROP_EDGE_FRAMES
+        sustained = (totals[end] - totals[index]) / (end - index)
+        ratio = edge / max(before, 1e-6)
+        if min(edge, sustained) >= minimum and ratio >= _DROP_STEP:
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_index = index
+        elif best_index >= 0:
+            return frames[best_index][0]
+    # A ratio still climbing at the last visible frame may not have reached the step yet.
+    return frames[best_index][0] if 0 <= best_index < last_index else None
 
 
 def _clamp_interval(interval_us: int) -> int:

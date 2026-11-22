@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 
 import pytest
 from aiosendspin.models.visualizer import BeatTiming
@@ -223,6 +224,77 @@ def test_party_auto_finds_a_drop_in_the_queued_audio() -> None:
     drop = sections.index(_Section.DROP)
     assert _Section.DIP in sections[:drop]
     assert _Section.BUILD in sections[:drop]
+
+
+def _with_kicks(energy: float, timestamp_us: int) -> float:
+    """Add a 120 BPM kick pattern to a section's energy level."""
+    return energy * (1.25 if timestamp_us % 500_000 < 100_000 else 0.9)
+
+
+def _rising_build(timestamp_us: int) -> float:
+    """Return a verse, a build that gets louder for 10 seconds, then a drop at 30 seconds."""
+    if timestamp_us < 20_000_000:
+        energy = 0.35
+    elif timestamp_us < 30_000_000:
+        energy = 0.35 + 0.25 * (timestamp_us - 20_000_000) / 10_000_000
+    else:
+        energy = 0.9
+    return _with_kicks(energy, timestamp_us)
+
+
+def _first_drop_us(
+    energy_at: Callable[[int], float], duration_us: int, lookahead_us: int = 4_000_000
+) -> tuple[int | None, set[_Section]]:
+    """Play a song with audio queued ahead; return the first drop and the sections before it."""
+    engine = PartyEngine(_row(3))
+    next_frame = 0
+    before_drop: set[_Section] = set()
+    for tick in range(duration_us // _TICK_US):
+        now = tick * _TICK_US
+        while next_frame <= min(now + lookahead_us, duration_us):
+            level = min(1.0, energy_at(next_frame))
+            engine.observe(next_frame, [int(level * level * 65535)] * 17)
+            next_frame += 50_000
+        index = now // 500_000
+        beat = BeatEvent(index * 500_000, index % 4 == 0, 500_000)
+        engine.render("party_auto", now, _PALETTE, [], beat, None)
+        if engine._section is _Section.DROP:
+            return now, before_drop
+        before_drop.add(engine._section)
+    return None, before_drop
+
+
+@pytest.mark.parametrize("lookahead_us", [4_000_000, 1_000_000])
+def test_party_auto_catches_a_drop_after_a_rising_build(lookahead_us: int) -> None:
+    """A build that gets louder still leads to a drop on time, however little audio is queued."""
+    drop_us, before_drop = _first_drop_us(_rising_build, 34_000_000, lookahead_us)
+    assert drop_us is not None
+    assert 30_000_000 <= drop_us <= 30_000_000 + 2 * _TICK_US
+    assert _Section.DIP in before_drop
+
+
+def test_party_auto_does_not_treat_a_steady_rise_as_a_drop() -> None:
+    """Music that only gets gradually louder never fires a drop."""
+    drop_us, _ = _first_drop_us(lambda ts: _with_kicks(0.3 + 0.5 * ts / 40_000_000, ts), 40_000_000)
+    assert drop_us is None
+
+
+def test_party_auto_ignores_kicks_in_a_loud_section() -> None:
+    """A steady four-on-the-floor groove is not a drop."""
+    drop_us, _ = _first_drop_us(lambda ts: _with_kicks(0.7, ts), 40_000_000)
+    assert drop_us is None
+
+
+def test_party_auto_ignores_a_short_gap_at_the_same_level() -> None:
+    """A one-beat stop that returns to the same level is not a drop."""
+
+    def with_gap(timestamp_us: int) -> float:
+        if 20_000_000 <= timestamp_us < 20_500_000:
+            return 0.05
+        return _with_kicks(0.5, timestamp_us)
+
+    drop_us, _ = _first_drop_us(with_gap, 30_000_000)
+    assert drop_us is None
 
 
 def test_switching_to_a_party_mode_keeps_queued_audio() -> None:
