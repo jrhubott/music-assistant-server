@@ -58,6 +58,11 @@ def _create_party_plugin() -> PartyPlugin:
     plugin._host_voters = set()
     plugin._blocked_guests = set()
     plugin._host_failures = {}
+    plugin._blocked_names = {}
+    plugin._guest_renames = {}
+    plugin._token_grants = {}
+    plugin._token_reset_id = None
+    plugin._volume_balance = None
     plugin._session = None
     plugin._session_lock = asyncio.Lock()
     plugin.get_party_player = AsyncMock(return_value="party_queue")  # type: ignore[method-assign]

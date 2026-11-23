@@ -2241,6 +2241,8 @@
   "provider.party.config_entries.hide_back_button.label": "Hide Back Button in Fullscreen Mode",
   "provider.party.config_entries.highlight_ahead.description": "When enabled, the lyric line highlight transition finishes exactly when the line's timestamp arrives, giving a smooth anticipation effect. When disabled, the transition starts at the timestamp instead.",
   "provider.party.config_entries.highlight_ahead.label": "Highlight Lyrics Ahead of Time",
+  "provider.party.config_entries.host_max_volume.description": "The highest volume the host controls can set on the party speakers. Hosts cannot change this.",
+  "provider.party.config_entries.host_max_volume.label": "Host Maximum Volume",
   "provider.party.config_entries.host_pin.description": "At least 6 characters. Host controls stay off until this is set. Avoid a PIN you use elsewhere.",
   "provider.party.config_entries.host_pin.label": "Host PIN",
   "provider.party.config_entries.karaoke_mode.description": "When enabled, lyrics are displayed prominently in the center of the screen with the track list minimized to current and next song at the bottom.",
