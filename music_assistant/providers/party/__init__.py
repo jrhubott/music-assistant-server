@@ -25,12 +25,14 @@ from music_assistant_models.config_entries import (
     ConfigValueOption,
     ProviderConfig,
 )
+from music_assistant_models.constants import PLAYER_CONTROL_NONE
 from music_assistant_models.enums import (
     ConfigEntryType,
     EventType,
     MediaType,
     PlaybackState,
     ProviderFeature,
+    RepeatMode,
 )
 from music_assistant_models.errors import (
     InsufficientPermissions,
@@ -59,6 +61,7 @@ if TYPE_CHECKING:
 
     from music_assistant.mass import MusicAssistant
     from music_assistant.models import ProviderInstanceType
+    from music_assistant.models.player import Player
 
 # Configuration keys
 CONF_ENABLE_GUEST_ACCESS = "enable_guest_access"
@@ -102,6 +105,7 @@ CONF_ENABLE_FAIR_QUEUE = "enable_fair_queue"
 CONF_REQUIRE_LYRICS = "require_lyrics"
 CONF_ENABLE_HOST_CONTROLS = "enable_host_controls"
 CONF_PARTY_HOST_PIN = "host_pin"
+CONF_PARTY_HOST_MAX_VOLUME = "host_max_volume"
 CONF_ENABLE_SHOUT_OUTS = "enable_shout_outs"
 CONF_ENABLE_REACTIONS = "enable_reactions"
 # Party screen extras
@@ -158,6 +162,8 @@ HOST_PIN_MIN_LENGTH = 6
 HOST_PIN_MAX_FAILURES = 5
 HOST_PIN_MAX_TOTAL_FAILURES = 20
 HOST_PIN_LOCKOUT_SECONDS = 900
+MAX_HOST_MESSAGE_LENGTH = 140
+MAX_HOST_TOKEN_GRANT = 10
 REASON_NO_LYRICS = "no_lyrics"
 LYRICS_LOOKUP_TIMEOUT = 15
 LYRICS_CACHE_SIZE = 500
@@ -532,6 +538,14 @@ class PartyPlugin(PluginProvider):
                 depends_on=CONF_ENABLE_HOST_CONTROLS,
                 category="guest_features",
             ),
+            ConfigEntry(
+                key=CONF_PARTY_HOST_MAX_VOLUME,
+                type=ConfigEntryType.INTEGER,
+                default_value=100,
+                range=(1, 100),
+                depends_on=CONF_ENABLE_HOST_CONTROLS,
+                category="guest_features",
+            ),
             # Party screen extras
             ConfigEntry(
                 key=CONF_SHOW_LEADERBOARD,
@@ -612,6 +626,12 @@ class PartyPlugin(PluginProvider):
         self._host_voters: set[str] = set()
         self._blocked_guests: set[str] = set()
         self._host_failures: dict[str, list[float]] = {}
+        self._blocked_names: dict[str, str] = {}
+        self._guest_renames: dict[str, str] = {}
+        self._token_grants: dict[str, int] = {}
+        self._token_reset_id: str | None = None
+        # Speaker balance kept while the group is at zero, where the levels no longer hold it
+        self._volume_balance: dict[str, int] | None = None
         self._lyrics_cache: dict[str, bool] = {}
         self._lyrics_checked: dict[str, str] = {}
         self._lyrics_skips = 0
@@ -688,6 +708,28 @@ class PartyPlugin(PluginProvider):
             ("party/host_mute_shout_out", self.host_mute_shout_out),
             ("party/host_block_guest", self.host_block_guest),
             ("party/host_unblock_all", self.host_unblock_all),
+            ("party/host_unblock_guest", self.host_unblock_guest),
+            ("party/host_rename_guest", self.host_rename_guest),
+            ("party/host_grant_tokens", self.host_grant_tokens),
+            ("party/host_reset_tokens", self.host_reset_tokens),
+            ("party/guest_tokens", self.guest_tokens),
+            ("party/host_add_to_queue", self.host_add_to_queue),
+            ("party/host_move_item", self.host_move_item),
+            ("party/host_play_next", self.host_play_next),
+            ("party/host_play_item", self.host_play_item),
+            ("party/host_clear_upcoming", self.host_clear_upcoming),
+            ("party/host_play_pause", self.host_play_pause),
+            ("party/host_next", self.host_next),
+            ("party/host_previous", self.host_previous),
+            ("party/host_seek", self.host_seek),
+            ("party/host_set_shuffle", self.host_set_shuffle),
+            ("party/host_set_repeat", self.host_set_repeat),
+            ("party/host_volume_state", self.host_volume_state),
+            ("party/host_set_group_volume", self.host_set_group_volume),
+            ("party/host_set_group_mute", self.host_set_group_mute),
+            ("party/host_set_speaker_volume", self.host_set_speaker_volume),
+            ("party/host_set_speaker_mute", self.host_set_speaker_mute),
+            ("party/host_post_message", self.host_post_message),
         ):
             self._unregister_handles.append(
                 self.mass.register_api_command(
@@ -946,7 +988,8 @@ class PartyPlugin(PluginProvider):
         }
         if boost:
             extra_attrs[ATTR_PARTY_BOOSTED] = True
-        if name := self._guest_name(guest_name):
+        guest_key = self._guest_key(voter_id)
+        if name := self._guest_name(self._guest_renames.get(guest_key, guest_name)):
             extra_attrs[ATTR_PARTY_GUEST_NAME] = name
         shout_out = self._clean_text(message, MAX_SHOUT_OUT_LENGTH)
         if shout_out and self._shout_outs_enabled():
@@ -1017,7 +1060,8 @@ class PartyPlugin(PluginProvider):
             raise InvalidDataError("Party guest access is disabled")
         if not self.config.get_value(CONF_ENABLE_BOOST):
             raise InvalidDataError("Boost feature is disabled")
-        self._raise_if_blocked(await self._get_voter_id())
+        voter_id = await self._get_voter_id()
+        self._raise_if_blocked(voter_id)
 
         queue_id = await self.get_party_player()
         if not queue_id:
@@ -1031,7 +1075,7 @@ class PartyPlugin(PluginProvider):
             return {"success": False, "reason": REASON_NO_LYRICS}
 
         started_playback = False
-        name = self._guest_name(guest_name)
+        name = self._guest_name(self._guest_renames.get(self._guest_key(voter_id), guest_name))
 
         async with self._queue_lock:
             queue_items = self.mass.player_queues.items(queue_id)
@@ -1267,6 +1311,12 @@ class PartyPlugin(PluginProvider):
             "is_host": is_host,
             "retry_after": self._host_retry_after(voter_id, time.monotonic()) if enabled else 0,
             "blocked_count": len(self._blocked_guests) if is_host else 0,
+            "blocked_guests": [
+                {"guest_id": key, "name": self._blocked_names.get(key)}
+                for key in sorted(self._blocked_guests)
+            ]
+            if is_host
+            else [],
         }
 
     async def host_unlock(self, pin: str) -> dict[str, Any]:
@@ -1356,6 +1406,8 @@ class PartyPlugin(PluginProvider):
             if any(self._guest_key(host) == guest_key for host in self._host_voters):
                 raise InvalidDataError("A host cannot be blocked")
             self._blocked_guests.add(str(guest_key))
+            if name := target.extra_attributes.get(ATTR_PARTY_GUEST_NAME):
+                self._blocked_names[str(guest_key)] = str(name)
             queue = self.mass.player_queues.get(queue_id)
             boundary = committed_index(queue) if queue else None
             doomed = [
@@ -1378,7 +1430,384 @@ class PartyPlugin(PluginProvider):
         await self._require_host()
         count = len(self._blocked_guests)
         self._blocked_guests.clear()
+        self._blocked_names.clear()
         return {"success": True, "unblocked": count}
+
+    async def host_unblock_guest(self, guest_id: str) -> dict[str, Any]:
+        """
+        Unblock one blocked device.
+
+        :param guest_id: The guest key from the host status.
+        :returns: Result dict with success status.
+        """
+        await self._require_host()
+        if guest_id not in self._blocked_guests:
+            raise InvalidDataError("This guest is not blocked")
+        self._blocked_guests.discard(guest_id)
+        self._blocked_names.pop(guest_id, None)
+        return {"success": True}
+
+    async def host_rename_guest(self, guest_id: str, name: str) -> dict[str, Any]:
+        """
+        Rename a guest on their songs, the leaderboard and their future requests.
+
+        :param guest_id: The guest key stored on the guest's queue items.
+        :param name: The new name.
+        :returns: Result dict with success status and the name that was saved.
+        """
+        queue_id = await self._host_queue_id()
+        if not self._guest_names_enabled():
+            raise InvalidDataError("Guest names are disabled")
+        clean_name = self._clean_text(name, MAX_GUEST_NAME_LENGTH)
+        if not clean_name:
+            raise InvalidDataError("A guest name cannot be empty")
+        async with self._queue_lock:
+            items = [
+                item
+                for item in self.mass.player_queues.items(queue_id)
+                if item.extra_attributes.get(ATTR_PARTY_GUEST_ID) == guest_id
+            ]
+            if not items:
+                raise InvalidDataError("This guest has no songs in the queue")
+            for item in items:
+                item.extra_attributes[ATTR_PARTY_GUEST_NAME] = clean_name
+            self._guest_renames[guest_id] = clean_name
+            self.mass.player_queues.signal_update(queue_id, items_changed=True)
+        for voter_id, stats in self._guest_stats.items():
+            if self._guest_key(voter_id) == guest_id:
+                stats.name = clean_name
+                self.signal_provider_event(
+                    {
+                        "event": "leaderboard_updated",
+                        "leaderboard": [entry.to_dict() for entry in self._build_leaderboard()],
+                    }
+                )
+                break
+        return {"success": True, "name": clean_name}
+
+    async def host_grant_tokens(self, guest_id: str, amount: int = 1) -> dict[str, Any]:
+        """
+        Give one guest extra add, boost and skip tokens.
+
+        :param guest_id: The guest key stored on the guest's queue items.
+        :param amount: How many tokens of each kind to give.
+        :returns: Result dict with success status.
+        """
+        queue_id = await self._host_queue_id()
+        if not 1 <= int(amount) <= MAX_HOST_TOKEN_GRANT:
+            raise InvalidDataError(f"Give between 1 and {MAX_HOST_TOKEN_GRANT} tokens")
+        if not any(
+            item.extra_attributes.get(ATTR_PARTY_GUEST_ID) == guest_id
+            for item in self.mass.player_queues.items(queue_id)
+        ):
+            raise InvalidDataError("This guest has no songs in the queue")
+        self._token_grants[guest_id] = self._token_grants.get(guest_id, 0) + int(amount)
+        self.signal_provider_event({"event": "tokens_updated"})
+        return {"success": True}
+
+    async def host_reset_tokens(self) -> dict[str, Any]:
+        """
+        Refill every guest's tokens and drop extra tokens not collected yet.
+
+        :returns: Result dict with success status.
+        """
+        await self._require_host()
+        self._token_grants.clear()
+        self._token_reset_id = secrets.token_hex(8)
+        self.signal_provider_event({"event": "tokens_updated"})
+        return {"success": True}
+
+    async def guest_tokens(self) -> dict[str, Any]:
+        """
+        Collect the extra tokens the host gave this device.
+
+        :returns: The number of extra tokens of each kind, and the id of the last reset.
+        """
+        guest_key = self._guest_key(await self._get_voter_id())
+        return {
+            "granted": self._token_grants.pop(guest_key, 0),
+            "reset_id": self._token_reset_id,
+        }
+
+    async def host_add_to_queue(self, uri: str, play_next: bool = False) -> dict[str, Any]:
+        """
+        Add a song as the host, without token, duplicate or request badge handling.
+
+        :param uri: The URI of the media item to add.
+        :param play_next: Add it right after the song that is playing, else at the end.
+        :returns: Result dict with success status.
+        """
+        queue_id = await self._host_queue_id()
+        if not await self._uri_has_lyrics(uri):
+            return {"success": False, "reason": REASON_NO_LYRICS}
+        media_item = await self.mass.music.get_item_by_uri(uri)
+        if not media_item or media_item.media_type not in (MediaType.TRACK, MediaType.RADIO):
+            raise InvalidDataError(f"Cannot add {uri} to queue - not a playable item")
+        queue_item = build_queue_item(queue_id, media_item)  # type: ignore[arg-type]
+        async with self._queue_lock:
+            queue = self.mass.player_queues.get(queue_id)
+            if not queue:
+                raise InvalidDataError(f"Queue not found: {queue_id}")
+            items = self.mass.player_queues.items(queue_id)
+            boundary = committed_index(queue)
+            insert_index = len(items)
+            if play_next:
+                insert_index = 0 if boundary is None else boundary + 1
+            await self.mass.player_queues.load(
+                queue_id=queue_id,
+                queue_items=[queue_item],
+                insert_at_index=insert_index,
+                keep_remaining=True,
+                keep_played=True,
+                shuffle=False,
+            )
+            if queue.state not in (PlaybackState.PLAYING, PlaybackState.PAUSED):
+                await self.mass.player_queues.play_index(queue_id, insert_index)
+        return {"success": True}
+
+    async def host_move_item(self, queue_item_id: str, pos_shift: int) -> dict[str, Any]:
+        """
+        Move an upcoming song up or down the queue.
+
+        :param queue_item_id: The queue item to move.
+        :param pos_shift: Positions to move, negative is towards the song that is playing.
+        :returns: Result dict with success status.
+        """
+        queue_id = await self._host_queue_id()
+        if not pos_shift:
+            return {"success": True}
+        async with self._queue_lock:
+            self._ensure_upcoming(queue_id, queue_item_id)
+            try:
+                self.mass.player_queues.move_item(queue_id, queue_item_id, int(pos_shift))
+            except IndexError as err:
+                raise InvalidDataError("This song can no longer be moved") from err
+        return {"success": True}
+
+    async def host_play_next(self, queue_item_id: str) -> dict[str, Any]:
+        """
+        Move an upcoming song to play right after the current one.
+
+        :param queue_item_id: The queue item to move.
+        :returns: Result dict with success status.
+        """
+        queue_id = await self._host_queue_id()
+        async with self._queue_lock:
+            self._ensure_upcoming(queue_id, queue_item_id)
+            try:
+                self.mass.player_queues.move_item(queue_id, queue_item_id, 0)
+            except IndexError as err:
+                raise InvalidDataError("This song can no longer be moved") from err
+        return {"success": True}
+
+    async def host_play_item(self, queue_item_id: str) -> dict[str, Any]:
+        """
+        Play a song from the queue right away.
+
+        :param queue_item_id: The queue item to play.
+        :returns: Result dict with success status.
+        """
+        queue_id = await self._host_queue_id()
+        if not any(
+            item.queue_item_id == queue_item_id for item in self.mass.player_queues.items(queue_id)
+        ):
+            raise InvalidDataError(f"Queue item {queue_item_id} not found")
+        await self.mass.player_queues.play_index(queue_id, queue_item_id)
+        return {"success": True}
+
+    async def host_clear_upcoming(self, guest_id: str | None = None) -> dict[str, Any]:
+        """
+        Remove all upcoming songs, or only those of one guest.
+
+        :param guest_id: The guest whose songs to remove. Leave out to remove all.
+        :returns: Result dict with success status and the number of songs removed.
+        """
+        queue_id = await self._host_queue_id()
+        async with self._queue_lock:
+            queue = self.mass.player_queues.get(queue_id)
+            boundary = committed_index(queue) if queue else None
+            doomed = [
+                item.queue_item_id
+                for index, item in enumerate(self.mass.player_queues.items(queue_id))
+                if (boundary is None or index > boundary)
+                and (guest_id is None or item.extra_attributes.get(ATTR_PARTY_GUEST_ID) == guest_id)
+            ]
+            for item_id in doomed:
+                self.mass.player_queues.delete_item(queue_id, item_id)
+        return {"success": True, "removed": len(doomed)}
+
+    async def host_play_pause(self) -> dict[str, Any]:
+        """
+        Toggle play and pause on the party queue.
+
+        :returns: Result dict with success status.
+        """
+        await self.mass.player_queues.play_pause(await self._host_queue_id())
+        return {"success": True}
+
+    async def host_next(self) -> dict[str, Any]:
+        """
+        Skip the current song right away, without votes or tokens.
+
+        :returns: Result dict with success status.
+        """
+        await self.mass.player_queues.next(await self._host_queue_id())
+        return {"success": True}
+
+    async def host_previous(self) -> dict[str, Any]:
+        """
+        Go back to the previous song.
+
+        :returns: Result dict with success status.
+        """
+        await self.mass.player_queues.previous(await self._host_queue_id())
+        return {"success": True}
+
+    async def host_seek(self, position: int) -> dict[str, Any]:
+        """
+        Seek within the current song.
+
+        :param position: The position in seconds.
+        :returns: Result dict with success status.
+        """
+        queue_id = await self._host_queue_id()
+        await self.mass.player_queues.seek(queue_id, max(0, int(position)))
+        return {"success": True}
+
+    async def host_set_shuffle(self, enabled: bool) -> dict[str, Any]:
+        """
+        Turn shuffle on or off.
+
+        :param enabled: Whether shuffle is on.
+        :returns: Result dict with success status.
+        """
+        await self.mass.player_queues.set_shuffle(await self._host_queue_id(), bool(enabled))
+        return {"success": True}
+
+    async def host_set_repeat(self, repeat_mode: str) -> dict[str, Any]:
+        """
+        Set the repeat mode.
+
+        :param repeat_mode: One of the RepeatMode values.
+        :returns: Result dict with success status.
+        """
+        queue_id = await self._host_queue_id()
+        try:
+            mode = RepeatMode(repeat_mode)
+        except ValueError as err:
+            raise InvalidDataError(f"Unknown repeat mode: {repeat_mode}") from err
+        await self.mass.player_queues.set_repeat(queue_id, mode)
+        return {"success": True}
+
+    async def host_volume_state(self) -> dict[str, Any]:
+        """
+        Return the volume of the party speakers.
+
+        :returns: The group level and mute state, the speakers, and the maximum volume.
+        """
+        speakers = self._party_speakers(await self._host_queue_id())
+        levels = [speaker.volume_level or 0 for speaker in speakers]
+        return {
+            "max_volume": self._host_max_volume(),
+            "group_volume": max(levels, default=0),
+            "group_muted": bool(speakers) and all(s.volume_muted for s in speakers),
+            "speakers": [
+                {
+                    "player_id": speaker.player_id,
+                    "name": speaker.name,
+                    "volume": speaker.volume_level or 0,
+                    "muted": bool(speaker.volume_muted),
+                }
+                for speaker in speakers
+            ],
+        }
+
+    async def host_set_group_volume(self, volume_level: int) -> dict[str, Any]:
+        """
+        Set the party speakers to a level, keeping their balance.
+
+        The loudest speaker goes to the level, up to the maximum volume setting.
+
+        :param volume_level: The level (0..100).
+        :returns: Result dict with success status and the level that was applied.
+        """
+        speakers = self._party_speakers(await self._host_queue_id())
+        if not speakers:
+            raise InvalidDataError("This party has no speakers with volume control")
+        level = max(0, min(int(volume_level), self._host_max_volume()))
+        current = {speaker.player_id: speaker.volume_level or 0 for speaker in speakers}
+        balance = current
+        saved = self._volume_balance
+        if saved and not any(current.values()) and saved.keys() == current.keys():
+            balance = saved
+        self._volume_balance = dict(balance) if level == 0 else None
+        loudest = max(balance.values())
+        await asyncio.gather(
+            *(
+                self.mass.players.cmd_volume_set(
+                    player_id, round(base * level / loudest) if loudest else level
+                )
+                for player_id, base in balance.items()
+            )
+        )
+        return {"success": True, "volume": level}
+
+    async def host_set_group_mute(self, muted: bool) -> dict[str, Any]:
+        """
+        Mute or unmute all party speakers.
+
+        :param muted: Whether the speakers are muted.
+        :returns: Result dict with success status.
+        """
+        speakers = self._party_speakers(await self._host_queue_id())
+        await asyncio.gather(
+            *(
+                self.mass.players.cmd_volume_mute(speaker.player_id, bool(muted))
+                for speaker in speakers
+                if speaker.mute_control != PLAYER_CONTROL_NONE
+            )
+        )
+        return {"success": True}
+
+    async def host_set_speaker_volume(self, player_id: str, volume_level: int) -> dict[str, Any]:
+        """
+        Set the volume of one party speaker, up to the maximum volume setting.
+
+        :param player_id: The speaker, from the volume state.
+        :param volume_level: The level (0..100).
+        :returns: Result dict with success status and the level that was applied.
+        """
+        self._ensure_party_speaker(await self._host_queue_id(), player_id)
+        level = max(0, min(int(volume_level), self._host_max_volume()))
+        self._volume_balance = None
+        await self.mass.players.cmd_volume_set(player_id, level)
+        return {"success": True, "volume": level}
+
+    async def host_set_speaker_mute(self, player_id: str, muted: bool) -> dict[str, Any]:
+        """
+        Mute or unmute one party speaker.
+
+        :param player_id: The speaker, from the volume state.
+        :param muted: Whether the speaker is muted.
+        :returns: Result dict with success status.
+        """
+        self._ensure_party_speaker(await self._host_queue_id(), player_id)
+        await self.mass.players.cmd_volume_mute(player_id, bool(muted))
+        return {"success": True}
+
+    async def host_post_message(self, message: str) -> dict[str, Any]:
+        """
+        Show a message from the host on the party screen.
+
+        :param message: The message.
+        :returns: Result dict with success status.
+        """
+        await self._require_host()
+        text = self._clean_text(message, MAX_HOST_MESSAGE_LENGTH)
+        if not text:
+            raise InvalidDataError("The message is empty")
+        self.signal_provider_event({"event": "host_message", "message": text})
+        return {"success": True}
 
     # ==================== Helper Methods ====================
 
@@ -1671,6 +2100,48 @@ class PartyPlugin(PluginProvider):
         if not queue_id:
             raise InvalidDataError("Could not get player queue")
         return queue_id
+
+    def _host_max_volume(self) -> int:
+        """Return the highest volume the host tools may set."""
+        return int(cast("int", self.config.get_value(CONF_PARTY_HOST_MAX_VOLUME) or 100))
+
+    def _party_speakers(self, queue_id: str) -> list[Player]:
+        """
+        Return the speakers of the party whose volume can be controlled.
+
+        Phones of guests that listen in are left out, as is a remote party's virtual player.
+
+        :param queue_id: The party queue.
+        """
+        if self.config.get_value(CONF_PARTY_MODE) == SharedPlaybackMode.REMOTE.value:
+            return []
+        player = self.mass.players.get_player(queue_id)
+        if player is None:
+            return []
+        if player.synced_to and (leader := self.mass.players.get_player(player.synced_to)):
+            player = leader
+        listeners = self._session.guest_listeners if self._session else frozenset()
+        speakers = (
+            self.mass.players.get_player(member_id)
+            for member_id in (player.group_members or [player.player_id])
+            if member_id not in listeners
+        )
+        return [
+            speaker
+            for speaker in speakers
+            if speaker is not None and speaker.volume_control != PLAYER_CONTROL_NONE
+        ]
+
+    def _ensure_party_speaker(self, queue_id: str, player_id: str) -> None:
+        """
+        Check that a player is one of the party speakers.
+
+        :param queue_id: The party queue.
+        :param player_id: The player to check.
+        :raises InvalidDataError: When the player is not a party speaker.
+        """
+        if not any(s.player_id == player_id for s in self._party_speakers(queue_id)):
+            raise InvalidDataError("This speaker is not part of the party")
 
     def _lyrics_required(self) -> bool:
         """Return whether the party only plays songs that have lyrics."""

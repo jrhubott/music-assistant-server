@@ -54,6 +54,11 @@ def _create_plugin(**overrides: Any) -> PartyPlugin:
     plugin._host_voters = set()
     plugin._blocked_guests = set()
     plugin._host_failures = {}
+    plugin._blocked_names = {}
+    plugin._guest_renames = {}
+    plugin._token_grants = {}
+    plugin._token_reset_id = None
+    plugin._volume_balance = None
     plugin._session = None
     plugin._session_lock = asyncio.Lock()
     plugin._guest_stats = {}

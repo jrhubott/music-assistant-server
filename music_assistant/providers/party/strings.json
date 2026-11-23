@@ -148,6 +148,10 @@
       "label": "Host PIN",
       "description": "At least 6 characters. Host controls stay off until this is set. Avoid a PIN you use elsewhere."
     },
+    "host_max_volume": {
+      "label": "Host Maximum Volume",
+      "description": "The highest volume the host controls can set on the party speakers. Hosts cannot change this."
+    },
     "show_leaderboard": {
       "label": "Show DJ Leaderboard",
       "description": "Now and then show the guests that requested and boosted the most songs on the party screen. Needs guest nicknames."

@@ -175,6 +175,11 @@ class SharedPlaybackSession:
         # a player-owned queue always has the same id as the player
         return self._player_id
 
+    @property
+    def guest_listeners(self) -> frozenset[str]:
+        """Return the web players of the guests that are listening in."""
+        return frozenset(self._guest_listeners)
+
     def can_listen_in(self, web_player_id: str) -> bool:
         """
         Return whether the given guest web player can listen in on this session.
