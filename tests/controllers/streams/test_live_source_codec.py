@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -100,6 +101,7 @@ async def test_sonos_prefers_wav_for_live_sources_by_default(
     """Sonos players default to the known-compatible low-latency WAV path."""
     protocol = player_class.__new__(player_class)
     protocol._attr_device_info = DeviceInfo(model="Era 300", manufacturer="Sonos")
+    cast("Any", protocol).discovery_info = {"device": {"capabilities": []}}
 
     entries = await protocol.get_config_entries()
     entry = next(entry for entry in entries if entry.key == CONF_PREFER_WAV_FOR_LIVE_SOURCES)

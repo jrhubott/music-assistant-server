@@ -119,6 +119,25 @@ SUB_CROSSOVER_RANGE = OptionRange(50, 110)
 SURROUND_LEVEL_RANGE = OptionRange(-15, 15)
 # player config: offer the options the speaker sends no events for, which are polled
 CONF_SHOW_DEVICE_SETTINGS = "show_device_settings"
+# player config: button that makes a speaker announce its AirPlay receiver again
+ACTION_WAKE_AIRPLAY = "wake_airplay"
+# the id of a speaker's own zone ends in this; other endings are e.g. its headphone zone
+MAIN_ZONE_SUFFIX = "01400"
+# English fallbacks of the results of the wake button, by their translation key
+WAKE_AIRPLAY_MESSAGES = {
+    "airplay_disabled": "The AirPlay output of {0} is switched off.",
+    "already_announced": "{0} is already announcing AirPlay.",
+    "busy": "{0} is playing, paused or grouped. Stop it and try again.",
+    "in_progress": "{0} is already being woken.",
+    "input_active": "{0} is using TV or line-in audio. Try again when it is idle.",
+    "no_receiver": "No matching AirPlay receiver answered on {0}.",
+    "not_announced": "{0} did not start announcing AirPlay. Try power-cycling it.",
+    "not_responding": "{0} stopped responding after the wake. It may be restarting.",
+    "restarted": "{0} restarted during the wake. Check AirPlay again once it is back.",
+    "session_failed": "{0} did not accept the AirPlay session. Try power-cycling it.",
+    "unavailable": "AirPlay can not be woken on {0} right now.",
+    "woken": "AirPlay is back on {0}.",
+}
 
 # UPnP requests to a speaker stop after this many timeouts in a row, until a reconnect:
 # the player poll loop of all players waits for each request
@@ -129,6 +148,7 @@ UPNP_PORT = 1400
 UPNP_TIMEOUT = 10
 RENDERING_CONTROL_SERVICE = "urn:schemas-upnp-org:service:RenderingControl:1"
 DEVICE_PROPERTIES_SERVICE = "urn:schemas-upnp-org:service:DeviceProperties:1"
+ZONE_GROUP_TOPOLOGY_SERVICE = "urn:schemas-upnp-org:service:ZoneGroupTopology:1"
 HT_CONTROL_SERVICE = "urn:schemas-upnp-org:service:HTControl:1"
 
 

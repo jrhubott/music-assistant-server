@@ -37,7 +37,7 @@ from aiosonos.exceptions import (
     FailedCommand,
     SonosException,
 )
-from music_assistant_models.config_entries import ConfigEntry
+from music_assistant_models.config_entries import ConfigActionResult, ConfigEntry
 from music_assistant_models.constants import PLAYER_CONTROL_NATIVE
 from music_assistant_models.enums import (
     ChannelLayout,
@@ -66,9 +66,11 @@ from music_assistant.helpers.wake_on_lan import send_magic_packet
 from music_assistant.models.player import PlayerSource
 from music_assistant.models.player_protocol import AnnouncementFeature, PlayerProtocol
 from music_assistant.providers.sonos.const import (
+    ACTION_WAKE_AIRPLAY,
     AMP_MODEL,
     CONF_SHOW_DEVICE_SETTINGS,
     DEVICE_FEATURE_WAKEABLE,
+    MAIN_ZONE_SUFFIX,
     NON_HIRES_MODELS,
     OPTION_EVENT_VARIABLES,
     OPTIONS_EVENT_READ_DELAY,
@@ -86,8 +88,10 @@ from music_assistant.providers.sonos.const import (
     UNSUPPORTED_MODELS_NATIVE_ANNOUNCEMENTS,
     UPCOMING_ITEMS,
     UPNP_PORT,
+    WAKE_AIRPLAY_MESSAGES,
+    ZONE_GROUP_TOPOLOGY_SERVICE,
 )
-from music_assistant.providers.sonos.helpers import get_channel_layout
+from music_assistant.providers.sonos.helpers import get_channel_layout, parse_boot_seq
 from music_assistant.providers.sonos.options import (
     SONOS_OPTIONS,
     SonosDevice,
@@ -141,6 +145,9 @@ REPORTED_ERROR_HISTORY = 16
 # seconds for a woken speaker's radio to come up, and for a queue load to start it playing
 WAKE_TIMEOUT = 15
 WAKE_PLAY_KICK_TIMEOUT = 2
+# reads of the boot counter after an AirPlay wake, as a speaker that restarted is away a while
+WAKE_BOOT_CHECK_ATTEMPTS = 4
+WAKE_BOOT_CHECK_DELAY = 5
 # seconds the new coordinator of a group moved outside MA gets to report the role, and
 # our queue to stop playing here
 MOVED_GROUP_TIMEOUT = 5
@@ -241,6 +248,10 @@ class SonosPlayer(PlayerProtocol):
         # the AirPlay session on the speaker is Music Assistant's own; the speaker keeps
         # reporting it, paused, for a while after Music Assistant stopped streaming
         self._own_airplay_session = False
+        # the state as the speaker reports it: it also says PAUSED after Music Assistant stopped
+        self._reported_playback_state = PlaybackState.IDLE
+        # Music Assistant itself stopped what the speaker last played
+        self._stopped_by_ma = False
         # the other speakers of this speaker's set, as last reported to the players controller
         self._reported_bonded_ids: set[str] = set()
 
@@ -391,7 +402,7 @@ class SonosPlayer(PlayerProtocol):
         # The defaults cover that full hardware range, so the output format only narrows
         # when the user selects fewer rates.
         hi_res = self._attr_device_info.model not in NON_HIRES_MODELS
-        return [
+        entries = [
             CONF_ENTRY_PREFER_WAV_FOR_LIVE_SOURCES_DEFAULT_ENABLED,
             create_sample_rates_config_entry(
                 supported_sample_rates=[44100, 48000],
@@ -405,6 +416,32 @@ class SonosPlayer(PlayerProtocol):
                 default_value=False,
             ),
         ]
+        if (
+            SonosCapability.AIRPLAY in self.discovery_info["device"]["capabilities"]
+            and self.protocol_id.endswith(MAIN_ZONE_SUFFIX)
+            and self.mass.get_provider("airplay") is not None
+        ):
+            entries.append(
+                ConfigEntry(
+                    key=ACTION_WAKE_AIRPLAY,
+                    type=ConfigEntryType.ACTION,
+                    action=ACTION_WAKE_AIRPLAY,
+                    required=False,
+                )
+            )
+        return entries
+
+    async def handle_config_action(
+        self, action: str
+    ) -> list[ConfigEntry] | ConfigActionResult | None:
+        """
+        Run a button from the settings of this speaker.
+
+        :param action: The action id of the pressed button.
+        """
+        if action == ACTION_WAKE_AIRPLAY:
+            return await self._wake_airplay()
+        return await super().handle_config_action(action)
 
     async def on_detach(self) -> None:
         """Handle logic when the protocol is detached from its player."""
@@ -600,6 +637,7 @@ class SonosPlayer(PlayerProtocol):
         if self.client.player.is_passive:
             self.logger.debug("Ignore STOP command: Player is synced to another player.")
             return
+        self._stopped_by_ma = True
         await self.group_controller.stop()
         self._forget_queue()
         self._announcement_media = None
@@ -1334,6 +1372,9 @@ class SonosPlayer(PlayerProtocol):
         # map playback state
         was_playing = self._attr_playback_state == PlaybackState.PLAYING
         self._attr_playback_state = PLAYBACK_STATE_MAP[active_group.playback_state]
+        self._reported_playback_state = self._attr_playback_state
+        if self._attr_playback_state == PlaybackState.PLAYING:
+            self._stopped_by_ma = False
         self._attr_elapsed_time = active_group.position
 
         # figure out the active source based on the container
@@ -2478,6 +2519,111 @@ class SonosPlayer(PlayerProtocol):
     def _on_rendering_change(self, changes: dict[str, str]) -> None:
         if self.connected and not OPTION_EVENT_VARIABLES.isdisjoint(changes):
             self._schedule_options_read()
+
+    async def _wake_airplay(self) -> ConfigActionResult:
+        """Make this speaker announce its AirPlay receiver again, and report how that went."""
+        # imported here: the Sonos provider also runs without the AirPlay provider
+        from music_assistant.providers.airplay.helpers import get_protocol_id  # noqa: PLC0415
+        from music_assistant.providers.airplay.provider import AirPlayProvider  # noqa: PLC0415
+        from music_assistant.providers.airplay.wake import (  # noqa: PLC0415
+            WakeOutcome,
+            wake_receiver,
+        )
+
+        identifiers = self._attr_device_info.identifiers
+        mac_address = identifiers.get(IdentifierType.MAC_ADDRESS)
+        host = identifiers.get(IdentifierType.IP_ADDRESS)
+        airplay = self.mass.get_provider("airplay")
+        if (
+            not self.connected
+            or not mac_address
+            or not host
+            or not isinstance(airplay, AirPlayProvider)
+        ):
+            return self._wake_result("unavailable")
+        protocol_id = get_protocol_id(mac_address)
+        if airplay.get_player(protocol_id) is not None:
+            return self._wake_result(WakeOutcome.ALREADY_ANNOUNCED.value)
+        if not self.mass.players.wants_protocol(protocol_id):
+            return self._wake_result("airplay_disabled")
+        if blocker := self._wake_blocker():
+            return self._wake_result(blocker)
+
+        volume = self._attr_volume_level
+        boot_seq = await self._read_boot_seq()
+        outcome = await wake_receiver(
+            airplay, host, mac_address, lambda: self._wake_blocker() is not None
+        )
+        if outcome == WakeOutcome.BUSY:
+            return self._wake_result(self._wake_blocker() or outcome.value)
+        if outcome in (
+            WakeOutcome.ALREADY_ANNOUNCED,
+            WakeOutcome.NO_RECEIVER,
+            WakeOutcome.IN_PROGRESS,
+        ):
+            return self._wake_result(outcome.value)
+        new_boot_seq = None
+        for _ in range(WAKE_BOOT_CHECK_ATTEMPTS):
+            if (new_boot_seq := await self._read_boot_seq()) is not None:
+                break
+            await asyncio.sleep(WAKE_BOOT_CHECK_DELAY)
+        await self._restore_wake_volume(volume)
+        if boot_seq is not None and new_boot_seq is not None and new_boot_seq != boot_seq:
+            self.logger.warning("%s restarted during an AirPlay wake", self.display_name)
+            return self._wake_result("restarted")
+        if boot_seq is not None and new_boot_seq is None and outcome != WakeOutcome.WOKEN:
+            return self._wake_result("not_responding")
+        return self._wake_result(outcome.value)
+
+    def _wake_blocker(self) -> str | None:
+        """Return why this speaker can not be woken now, as a message key, None if it can."""
+        if self._attr_active_source in (SOURCE_TV, SOURCE_LINE_IN):
+            return "input_active"
+        really_paused = (
+            self._reported_playback_state == PlaybackState.PAUSED and not self._stopped_by_ma
+        )
+        if (
+            self._attr_playback_state != PlaybackState.IDLE
+            or really_paused
+            or len(self.client.player.group_members) > 1
+        ):
+            return "busy"
+        return None
+
+    async def _restore_wake_volume(self, volume: int | None) -> None:
+        """
+        Put back the volume this speaker had before a wake, if it changed.
+
+        :param volume: The volume before the wake.
+        """
+        if volume is None or self._attr_volume_level == volume:
+            return
+        try:
+            await self.volume_set(volume)
+        except (SonosException, PlayerCommandFailed, PlayerUnavailableError, *UPNP_ERRORS) as err:
+            self.logger.warning(
+                "Could not restore the volume of %s after a wake: %s", self.display_name, err
+            )
+
+    async def _read_boot_seq(self) -> int | None:
+        """Return the boot counter of this speaker, None when it does not answer."""
+        try:
+            result = await self.upnp.call(ZONE_GROUP_TOPOLOGY_SERVICE, "GetZoneGroupState")
+        except UPNP_ERRORS:
+            return None
+        return parse_boot_seq(str(result.get("ZoneGroupState", "")), self.protocol_id)
+
+    def _wake_result(self, key: str) -> ConfigActionResult:
+        """
+        Return the message of the wake button for an outcome.
+
+        :param key: The outcome, a key of WAKE_AIRPLAY_MESSAGES.
+        """
+        return ConfigActionResult(
+            message=WAKE_AIRPLAY_MESSAGES[key].format(self.display_name),
+            translation_key=f"{ACTION_WAKE_AIRPLAY}.{key}",
+            translation_args=[self.display_name],
+        )
 
 
 def _is_wakeable(discovery_info: SonosDiscoveryInfo) -> bool:

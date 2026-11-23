@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import html
+import re
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -24,6 +26,22 @@ _CHANNEL_LAYOUTS = {
     (3, True, False): ChannelLayout.LAYOUT_5_0,
     (3, True, True): ChannelLayout.LAYOUT_5_1,
 }
+
+
+def parse_boot_seq(zone_group_state: str, player_id: str) -> int | None:
+    """
+    Return the boot counter of a speaker from a ZoneGroupState document.
+
+    :param zone_group_state: The ZoneGroupState value, escaped or not.
+    :param player_id: The RINCON id of the speaker.
+    """
+    document = html.unescape(zone_group_state)
+    for tag in re.findall(r"<ZoneGroupMember\b[^>]*>", document):
+        if f'UUID="{player_id}"' not in tag:
+            continue
+        match = re.search(r'\bBootSeq="(\d+)"', tag)
+        return int(match.group(1)) if match else None
+    return None
 
 
 def get_primary_ip_address(discovery_info: AsyncServiceInfo) -> str | None:

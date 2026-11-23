@@ -3,6 +3,26 @@
     "show_device_settings": {
       "label": "Show device settings",
       "description": "Offer the status light, touch controls, Trueplay and (on home theater speakers) the IR repeater and the IR signal light as player options. The speaker reports no change of these, so it is polled every 30 seconds while they are shown."
+    },
+    "wake_airplay": {
+      "label": "Wake AirPlay",
+      "description": "For a speaker that lost its AirPlay or Sendspin output. Briefly plays silence over AirPlay so the speaker announces itself again. Only runs while the speaker is idle. You may hear a short click, and the speaker can restart."
+    }
+  },
+  "config_actions": {
+    "wake_airplay": {
+      "airplay_disabled": "The AirPlay output of {0} is switched off.",
+      "already_announced": "{0} is already announcing AirPlay.",
+      "busy": "{0} is playing, paused or grouped. Stop it and try again.",
+      "in_progress": "{0} is already being woken.",
+      "input_active": "{0} is using TV or line-in audio. Try again when it is idle.",
+      "no_receiver": "No matching AirPlay receiver answered on {0}.",
+      "not_announced": "{0} did not start announcing AirPlay. Try power-cycling it.",
+      "not_responding": "{0} stopped responding after the wake. It may be restarting.",
+      "restarted": "{0} restarted during the wake. Check AirPlay again once it is back.",
+      "session_failed": "{0} did not accept the AirPlay session. Try power-cycling it.",
+      "unavailable": "AirPlay can not be woken on {0} right now.",
+      "woken": "AirPlay is back on {0}."
     }
   },
   "manifest": {
