@@ -13,6 +13,7 @@
         "fix/dlna-sonos-zone",
         "feature/party-kiosk-link",
         "feature/party-enhancements",
+        "feature/party-host-controls",
         "feature/sonos-airplay-probe",
         "feature/hue-party-modes"
       ],
