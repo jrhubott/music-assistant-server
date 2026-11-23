@@ -18,6 +18,9 @@ from typing import TYPE_CHECKING
 
 from hue_entertainment import LightColorCommand
 
+from .constants import DEFAULT_PARTY_FULL_WHITE, DEFAULT_PARTY_LIGHT_RANGE, PARTY_MODES
+from .party_modes import BeatEvent, PartyEngine
+
 if TYPE_CHECKING:
     from aiosendspin.models.visualizer import BeatTiming
     from hue_entertainment import LightChannel
@@ -87,6 +90,17 @@ _NEUTRAL_GRADIENT: list[tuple[float, float, float]] = [
     (0.86, 0.93, 1.0),  # cool white
     (0.90, 0.90, 0.92),  # soft grey
 ]
+
+# Party modes need real color, so monochrome covers use these instead of tinted whites.
+_PARTY_DEFAULT_PALETTE: list[tuple[float, float, float]] = [
+    (1.0, 0.0, 0.6),  # magenta
+    (0.0, 0.8, 1.0),  # cyan
+    (0.55, 0.0, 1.0),  # violet
+    (1.0, 0.55, 0.0),  # amber
+]
+_PARTY_MIN_SAT = 0.9
+# Hue offsets that turn a single-hue cover into a contrasting party palette.
+_PARTY_HUE_OFFSETS: tuple[float, ...] = (0.0, 0.5, 0.08, 0.58)
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,12 +284,16 @@ class HueAudioAnalyzer:
         channels: list[LightChannel],
         color_mode: str = DEFAULT_MODE,
         brightness: int = 100,
+        light_range: str = DEFAULT_PARTY_LIGHT_RANGE,
+        full_white: bool = DEFAULT_PARTY_FULL_WHITE,
     ) -> None:
         """
         Initialize the analyzer.
 
         ``color_mode`` selects a preset bundle from `_MODES` (defaults to
         `DEFAULT_MODE` when unknown); reactivity is governed by that preset.
+        ``light_range`` sets how bright Party Auto runs, and ``full_white`` runs its
+        white flashes and blinders at full power.
         """
         self._channels = channels
         self._color_mode = color_mode
@@ -315,6 +333,8 @@ class HueAudioAnalyzer:
         self._pending_peaks: deque[tuple[int, float]] = deque()
         self._peak_boost: float = 0.0
         self._peak_set_at_us: int | None = None
+        self._last_peak_us: int | None = None
+        self._party = PartyEngine(channels, light_range=light_range, full_white=full_white)
 
         # Peak-driven palette walker. Used only when no beat schedule is
         # active; each consumed onset advances the position by one palette
@@ -330,11 +350,22 @@ class HueAudioAnalyzer:
         self,
         color_mode: str | None = None,
         brightness: int | None = None,
+        light_range: str | None = None,
+        full_white: bool | None = None,
     ) -> None:
         """Update settings without reset."""
+        if light_range is not None:
+            self._party.set_light_range(light_range)
+        if full_white is not None:
+            self._party.set_full_white(full_white)
         if color_mode is not None:
+            entering_party = color_mode in PARTY_MODES and self._color_mode not in PARTY_MODES
             self._color_mode = color_mode
             self._mode = _MODES.get(color_mode, _MODES[DEFAULT_MODE])
+            if entering_party:
+                self._party.reset()
+                for timestamp_us, bins in self._pending_spectrum:
+                    self._party.observe(timestamp_us, bins)
         if brightness is not None:
             self._brightness = max(0, min(100, brightness)) / 100.0
 
@@ -354,6 +385,8 @@ class HueAudioAnalyzer:
         instead of network arrival time.
         """
         self._pending_spectrum.append((timestamp_us, bins))
+        if self._color_mode in PARTY_MODES:
+            self._party.observe(timestamp_us, bins)
 
     def apply_peak(self, strength: int, timestamp_us: int) -> None:
         """
@@ -380,6 +413,8 @@ class HueAudioAnalyzer:
         be forced to wrap backwards at every bar end, which reads as a flash.
         Keeping a continuous count gives a strictly forward palette sweep.
         """
+        if beats and self._last_beat_in_bar < 0:
+            self._party.mark_track_start(beats[0].timestamp_us)
         for beat in beats:
             bib = 0 if self._last_beat_in_bar < 0 else self._last_beat_in_bar + 1
             self._beats.append(
@@ -395,13 +430,16 @@ class HueAudioAnalyzer:
         """Drop only the beat schedule (a track change re-pushes it; spectrum keeps flowing)."""
         self._beats.clear()
         self._last_beat_in_bar = -1
+        self._party.clear_schedule()
 
     def clear_beats(self) -> None:
         """Drop the entire beat schedule + pending peaks (seek / stream end)."""
         self.clear_beat_schedule()
+        self._party.reset()
         self._pending_peaks.clear()
         self._peak_boost = 0.0
         self._peak_set_at_us = None
+        self._last_peak_us = None
         self._peak_palette_position = 0.0
         self._pending_spectrum.clear()
         self._spectrum = []
@@ -412,6 +450,8 @@ class HueAudioAnalyzer:
         """Render every channel at server-clock time ``now_us``."""
         self._prune(now_us)
         self._advance_spectrum(now_us)
+        if self._color_mode in PARTY_MODES:
+            return self._render_party(now_us)
         palette = self._active_palette()
         if not self._channels:
             return []
@@ -435,6 +475,39 @@ class HueAudioAnalyzer:
         pulse = self._compute_pulse(now_us, prior, next_beat, segment)
         colors = self._per_channel_colors(palette, prior, next_beat, now_us, segment)
         return self._fill_per_channel(colors, base_brightness * pulse, channel_mults)
+
+    def _render_party(self, now_us: int) -> list[LightColorCommand]:
+        """Render the active party mode."""
+        if not self._channels:
+            return []
+        self._consume_peaks(now_us)
+        prior, next_beat, segment, _ = self._current_segment(now_us)
+        beat = None
+        if prior is not None and next_beat is not None and segment is not None and segment > 0:
+            beat = BeatEvent(prior.timestamp_us, prior.is_downbeat, segment)
+        colors = self._party.render(
+            self._color_mode,
+            now_us,
+            self._party_palette(),
+            self._spectrum,
+            beat,
+            self._last_peak_us,
+        )
+        return self._fill_per_channel(colors, self._brightness, None)
+
+    def _party_palette(self) -> list[tuple[float, float, float]]:
+        """Return the album colors pushed to full saturation, with at least two distinct hues."""
+        raw, _ = self._gather_raw_palette()
+        chromatic = [c for c in raw if colorsys.rgb_to_hsv(*c)[1] >= _PALETTE_MIN_SAT]
+        if not chromatic:
+            return _equalize_palette(_order_palette(_PARTY_DEFAULT_PALETTE), 1.0)
+        vivid = [_vivid(color) for color in chromatic]
+        if _distinct_hue_count(vivid) < 2:
+            hue = colorsys.rgb_to_hsv(*vivid[0])[0]
+            vivid = [
+                colorsys.hsv_to_rgb((hue + offset) % 1.0, 1.0, 1.0) for offset in _PARTY_HUE_OFFSETS
+            ]
+        return _equalize_palette(_order_palette(vivid), 1.0)
 
     def _advance_spectrum(self, now_us: int) -> None:
         """Drain due spectrum frames and update saturation per drained frame."""
@@ -480,6 +553,7 @@ class HueAudioAnalyzer:
         """
         while self._pending_peaks and self._pending_peaks[0][0] <= now_us:
             ts, boost = self._pending_peaks.popleft()
+            self._last_peak_us = ts
             if self._peak_set_at_us is None or boost >= self._peak_boost:
                 self._peak_boost = boost
                 self._peak_set_at_us = ts
@@ -891,6 +965,12 @@ def _boost_saturation(rgb: tuple[float, float, float], factor: float) -> tuple[f
     r, g, b = rgb
     h, s, v = colorsys.rgb_to_hsv(r, g, b)
     return colorsys.hsv_to_rgb(h, min(1.0, s * factor), v)
+
+
+def _vivid(rgb: tuple[float, float, float]) -> tuple[float, float, float]:
+    """Return ``rgb`` at full value with its saturation raised to the party minimum."""
+    h, s, _ = colorsys.rgb_to_hsv(*rgb)
+    return colorsys.hsv_to_rgb(h, max(s, _PARTY_MIN_SAT), 1.0)
 
 
 def _distinct_hue_count(colors: list[tuple[float, float, float]]) -> int:

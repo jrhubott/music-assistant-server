@@ -39,7 +39,13 @@ from .constants import (
     SPECTRUM_F_MIN,
     SPECTRUM_SCALE,
 )
-from .settings import get_brightness, get_color_mode, get_hue_latency_ms
+from .settings import (
+    get_brightness,
+    get_color_mode,
+    get_hue_latency_ms,
+    get_party_full_white,
+    get_party_light_range,
+)
 from .targets import TargetUnavailableError
 
 if TYPE_CHECKING:
@@ -109,6 +115,8 @@ class HueEntertainmentBridge:
             channels=self.target.channels,
             color_mode=get_color_mode(self.provider.config),
             brightness=get_brightness(self.provider.config),
+            light_range=get_party_light_range(self.provider.config),
+            full_white=get_party_full_white(self.provider.config),
         )
 
         client_id = self.target.client_id
@@ -209,12 +217,16 @@ class HueEntertainmentBridge:
         color_mode: str | None = None,
         brightness: int | None = None,
         hue_latency_ms: int | None = None,
+        light_range: str | None = None,
+        full_white: bool | None = None,
     ) -> None:
         """Update analyzer/bridge settings without restarting the bridge."""
         if self._analyzer:
             self._analyzer.update_settings(
                 color_mode=color_mode,
                 brightness=brightness,
+                light_range=light_range,
+                full_white=full_white,
             )
         if hue_latency_ms is not None:
             self._hue_latency_us = hue_latency_ms * 1000
@@ -458,6 +470,8 @@ class HueEntertainmentBridgeManager:
         color_mode: str | None = None,
         brightness: int | None = None,
         hue_latency_ms: int | None = None,
+        light_range: str | None = None,
+        full_white: bool | None = None,
     ) -> None:
         """Update settings on all bridges."""
         for bridge in self._bridges.values():
@@ -465,6 +479,8 @@ class HueEntertainmentBridgeManager:
                 color_mode=color_mode,
                 brightness=brightness,
                 hue_latency_ms=hue_latency_ms,
+                light_range=light_range,
+                full_white=full_white,
             )
 
     async def stop_all(self) -> None:

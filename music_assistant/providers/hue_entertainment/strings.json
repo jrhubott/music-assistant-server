@@ -38,7 +38,53 @@
     },
     "color_mode": {
       "label": "Mode",
-      "description": "Visualization style. Smooth (default): spectrum-driven brightness with a slowly drifting palette. Ambient: colour cycling only, no brightness modulation. Flashing: brightness pulse on every beat, stronger on downbeats. Energetic: large brightness swings on hits plus fast palette rotation."
+      "description": "Visualization style. Party modes limit each light to three flashes per second.",
+      "options": {
+        "smooth": "Smooth",
+        "ambient": "Ambient",
+        "flashing": "Flashing",
+        "energetic": "Energetic",
+        "party_auto": "Party Auto",
+        "chase": "Chase",
+        "shockwave": "Shockwave",
+        "color_slam": "Color Slam",
+        "two_tone": "Two-Tone Clash",
+        "rhythm_section": "Rhythm Section",
+        "confetti": "Confetti",
+        "warm_up": "Warm-Up"
+      },
+      "option_descriptions": {
+        "smooth": "Spectrum-driven brightness with a slowly drifting palette (default).",
+        "ambient": "Colour cycling only, no brightness modulation.",
+        "flashing": "Brightness pulse on every beat, stronger on downbeats.",
+        "energetic": "Large brightness swings on hits plus fast palette rotation.",
+        "party_auto": "Follows the song: calm intros, rising builds and a big hit on the drop.",
+        "chase": "Colour runs across the room on the beat and bounces back.",
+        "shockwave": "Each beat bursts from the center of the room outward.",
+        "color_slam": "One bold colour per bar, with a hard change on the downbeat.",
+        "two_tone": "Alternating lights swap two contrasting album colours.",
+        "rhythm_section": "Separate lights follow the kick, the snare and the hi-hats.",
+        "confetti": "Random lights sparkle on hi-hats over a darker base colour.",
+        "warm_up": "Slow, soft colour movement for arrivals and dinner, with no flashing."
+      }
+    },
+    "party_light_range": {
+      "label": "Party Auto light range",
+      "description": "How bright Party Auto runs between its big moments.",
+      "options": {
+        "moody": "Moody",
+        "balanced": "Balanced",
+        "bright": "Bright"
+      },
+      "option_descriptions": {
+        "moody": "Darker rooms with strong contrast on the hits.",
+        "balanced": "Bright loud sections and dark breakdowns (default).",
+        "bright": "Keeps the room lit, with darkness only in the quietest moments."
+      }
+    },
+    "party_full_white": {
+      "label": "Full-power white hits",
+      "description": "Run Party Auto's white flashes and blinders at 100% instead of 85%. Colors stay at 85% to keep them accurate."
     },
     "hue_latency_ms": {
       "label": "Light latency (ms)",

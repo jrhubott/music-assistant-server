@@ -53,6 +53,18 @@ Music Assistant runs one Zigbee stream at a time: a start takes it over from the
 | **Ambient** | Colour cycling only, no brightness modulation — relaxing, smooth transitions. |
 | **Flashing** | Brightness pulse on every beat, stronger on downbeats. |
 | **Energetic** | Large brightness swings on hits plus fast palette rotation. |
+| **Party Auto** | Follows the song: calm intros, rising builds, a dip, then a big hit on the drop. |
+| **Chase** | Colour runs across the room on the beat and bounces back. |
+| **Shockwave** | Each beat bursts from the center of the room outward. |
+| **Color Slam** | One bold colour per bar, with a hard change on the downbeat. |
+| **Two-Tone Clash** | Alternating lights swap two contrasting album colours. |
+| **Rhythm Section** | Separate lights follow the kick, the snare and the hi-hats. |
+| **Confetti** | Random lights sparkle on hi-hats over a darker base colour. |
+| **Warm-Up** | Slow, soft colour movement for arrivals and dinner, with no flashing. |
+
+The party modes live in `party_modes.py`. They limit each light to three flashes per second and keep a dim floor so the room never goes fully dark. Party Auto reads the audio features queued ahead of the playhead to see a drop coming, cancels a drop whose jump in energy does not last, and ignores the jump at the start of a new track.
+
+Party Auto ties brightness to the song's energy: dark breakdowns with one slow accent, grooves that alternate bright and dark phrases, bright peaks with a short blinder every 16 bars, and a drop that holds the room in a contrasting color before easing into Shockwave. The `party_light_range` setting shifts these levels.
 
 ## Hue streaming layer
 
@@ -93,7 +105,9 @@ The setup flow asks for the backend (`backend`: `hue_bridge` or `zha`), then pai
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `brightness` | Integer | 100 | Overall light brightness (0-100) |
-| `color_mode` | String | smooth | Visualization mode (smooth / ambient / flashing / energetic) |
+| `color_mode` | String | smooth | Visualization mode (smooth / ambient / flashing / energetic / party_auto / chase / shockwave / color_slam / two_tone / rhythm_section / confetti / warm_up) |
+| `party_light_range` | String | balanced | How bright Party Auto runs (moody / balanced / bright) |
+| `party_full_white` | Boolean | false | Run Party Auto's white flashes and blinders at 100% instead of 85% |
 | `hue_latency_ms` | Integer | 20 | Lead time lights render ahead of the playhead (0-3000) |
 
 ## Quick Setup
