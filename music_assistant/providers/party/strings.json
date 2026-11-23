@@ -52,9 +52,13 @@
       "label": "Highlight Lyrics Ahead of Time",
       "description": "When enabled, the lyric line highlight transition finishes exactly when the line's timestamp arrives, giving a smooth anticipation effect. When disabled, the transition starts at the timestamp instead."
     },
+    "word_highlight": {
+      "label": "Highlight Lyrics Word by Word",
+      "description": "When enabled, each word of the current lyric line fills in as it is sung. When disabled, the whole line is highlighted at once."
+    },
     "anti_burn_in": {
       "label": "Enable Anti Burn-in",
-      "description": "Periodically swap the QR code and track list sides to prevent burn-in on OLED or plasma displays. Sides swap every 10 minutes."
+      "description": "Swap the QR code and track list sides to prevent burn-in on OLED or plasma displays. Sides swap at the first song change after 10 minutes, never during a song."
     },
     "enable_rate_limiting": {
       "label": "Enable Rate Limiting",
@@ -126,12 +130,65 @@
     },
     "revoke_kiosk_link": {
       "label": "Revoke TV link"
+    },
+    "lyrics_delay": {
+      "label": "Lyrics Delay (ms)",
+      "description": "Hold the karaoke lyrics back by this many milliseconds to match speakers that play the music late, such as AirPlay, Chromecast or Sonos groups. Use a negative value to show the lyrics earlier."
+    },
+    "enable_guest_names": {
+      "label": "Ask Guests for a Nickname",
+      "description": "Ask guests for a nickname when they join. Their nickname is shown on the party screen with the songs they request (\"Requested by Sam\") and on the leaderboard."
+    },
+    "enable_shout_outs": {
+      "label": "Allow Shout-outs",
+      "description": "Let guests add a short message to a song they request (\"for Mike's birthday\"). It is shown on the party screen while that song plays."
+    },
+    "enable_reactions": {
+      "label": "Allow Reactions",
+      "description": "Let guests send emoji reactions from their phone. Reactions float up the party screen."
+    },
+    "enable_fair_queue": {
+      "label": "Fair Queue",
+      "description": "Guests take turns, so one person can't line up several songs in a row. Boosted songs still play first."
+    },
+    "require_lyrics": {
+      "label": "Only Songs With Lyrics",
+      "description": "Refuse guest requests for songs without lyrics, remove them when they are next in the queue, and skip them if they start playing. Needs a lyrics provider. Instrumental songs count as having no lyrics."
+    },
+    "enable_host_controls": {
+      "label": "Enable Host Controls",
+      "description": "Let someone with the host PIN remove requests, mute shout-outs and block devices from the guest page. This keeps order at the party, but is not a security boundary against a guest using the API directly."
+    },
+    "host_pin": {
+      "label": "Host PIN",
+      "description": "At least 6 characters. Host controls stay off until this is set. Avoid a PIN you use elsewhere."
+    },
+    "show_leaderboard": {
+      "label": "Show DJ Leaderboard",
+      "description": "Now and then show the guests that requested and boosted the most songs on the party screen. Needs guest nicknames."
+    },
+    "show_skip_meter": {
+      "label": "Show Skip Vote Meter",
+      "description": "Show how many skip votes the current song has, and how many it needs, as a bar on the party screen."
+    },
+    "show_request_animations": {
+      "label": "Animate New Requests",
+      "description": "Show a short animation on the party screen when a guest requests or boosts a song."
+    },
+    "show_tips": {
+      "label": "Show Tips for Guests",
+      "description": "Show rotating tips on the party screen that explain how guests can join, request, boost, skip and react."
+    },
+    "show_copy_link": {
+      "label": "Show Copy Link Button",
+      "description": "Show the button under the QR code that copies or shares the join link, and let the QR code be tapped to copy it. Guests can still scan the QR code when this is off."
     }
   },
   "config_categories": {
     "guest_features": "Guest Features",
     "karaoke": "Karaoke",
-    "tv_link": "TV link"
+    "tv_link": "TV link",
+    "party_screen": "Party Screen"
   },
   "manifest": {
     "description": "Enable guest access with a shareable URL for party, allowing guests to add songs to the queue with rate limiting."

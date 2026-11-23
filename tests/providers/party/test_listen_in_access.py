@@ -15,6 +15,7 @@ from music_assistant.helpers.shared_playback import SharedPlaybackSession
 from music_assistant.providers.party import (
     CONF_ENABLE_GUEST_ACCESS,
     CONF_PARTY_MODE,
+    CONF_REQUIRE_LYRICS,
     PartyPlugin,
 )
 from tests.common import MockProvider, as_user, attach_mock, grouping_player_controller
@@ -43,6 +44,7 @@ async def plugin() -> PartyPlugin:
     plugin.config = MagicMock()
     plugin.config.get_value.side_effect = {
         CONF_ENABLE_GUEST_ACCESS: True,
+        CONF_REQUIRE_LYRICS: False,
         CONF_PARTY_MODE: "venue",
     }.__getitem__
     plugin._unregister_handles = []
