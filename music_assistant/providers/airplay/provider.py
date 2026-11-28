@@ -7,7 +7,6 @@ import base64
 import json
 import logging
 import os
-import socket
 import time
 from contextlib import suppress
 from ipaddress import IPv4Address, IPv6Address, ip_address
@@ -203,16 +202,20 @@ class AirPlayProvider(PlayerProvider):
         player_id = (
             self.bridge_manager.get_transport_command_target(player.player_id) or player.player_id
         )
+        # Some receivers echo play (or play/pause) as confirmation of a command from MA,
+        # also while MA's own stream to them is still starting.
+        stream = player.stream
+        stream_starting = stream is not None and stream.running and stream.start_pending
         match command:
             case AirPlayRemoteCommand.PLAY:
-                # Some receivers echo play as confirmation of a command from MA.
-                if player.playback_state != PlaybackState.PLAYING:
+                if player.playback_state != PlaybackState.PLAYING and not stream_starting:
                     self.mass.create_task(self.mass.players.cmd_play(player_id))
             case AirPlayRemoteCommand.PAUSE:
                 if player.playback_state == PlaybackState.PLAYING:
                     self.mass.create_task(self.mass.players.cmd_pause(player_id))
             case AirPlayRemoteCommand.PLAY_PAUSE:
-                self.mass.create_task(self.mass.players.cmd_play_pause(player_id))
+                if not stream_starting:
+                    self.mass.create_task(self.mass.players.cmd_play_pause(player_id))
             case AirPlayRemoteCommand.NEXT:
                 self.mass.create_task(self.mass.players.cmd_next_track(player_id))
             case AirPlayRemoteCommand.PREVIOUS:
@@ -259,20 +262,7 @@ class AirPlayProvider(PlayerProvider):
         self.dacp_id = dacp_id = self.mass.server_id[:16].upper()
         self.logger.debug("Starting DACP ActiveRemote %s on port %s", dacp_id, dacp_port)
         self._dacp_server = await asyncio.start_server(self._handle_dacp_request, port=dacp_port)
-        server_id = f"iTunes_Ctrl_{dacp_id}.{DACP_DISCOVERY_TYPE}"
-        self._dacp_info = AsyncServiceInfo(
-            DACP_DISCOVERY_TYPE,
-            name=server_id,
-            addresses=[await get_ip_pton(self.mass.streams.publish_ip)],
-            port=dacp_port,
-            properties={
-                "txtvers": "1",
-                "Ver": "63B5E5C0C201542E",
-                "DbId": "63B5E5C0C201542E",
-                "OSsi": "0x1F5",
-            },
-            server=f"{socket.gethostname()}.local",
-        )
+        self._dacp_info = await self._create_dacp_service_info(dacp_port)
         await self._register_dacp_service()
 
         # Run one shared PTP clock daemon for the provider lifetime: all native
@@ -798,6 +788,30 @@ class AirPlayProvider(PlayerProvider):
             if discovery_info is not None
             for address in discovery_info.parsed_addresses()
         }
+
+    async def _create_dacp_service_info(self, port: int) -> AsyncServiceInfo:
+        """
+        Build the DACP ActiveRemote mDNS service, reachable on the publish IP only.
+
+        :param port: The port the DACP server listens on.
+        """
+        return AsyncServiceInfo(
+            DACP_DISCOVERY_TYPE,
+            name=f"iTunes_Ctrl_{self.dacp_id}.{DACP_DISCOVERY_TYPE}",
+            addresses=[await get_ip_pton(self.mass.streams.publish_ip)],
+            port=port,
+            properties={
+                "txtvers": "1",
+                "Ver": "63B5E5C0C201542E",
+                "DbId": "63B5E5C0C201542E",
+                "OSsi": "0x1F5",
+            },
+            # A host name of our own: other mDNS responders on this machine also answer
+            # for the machine's host name, with addresses a receiver may not reach,
+            # which holds up its DACP requests. The trailing dot makes zeroconf answer
+            # address queries for this name.
+            server=f"ma-dacp-{self.dacp_id.lower()}.local.",
+        )
 
     async def _register_dacp_service(self) -> None:
         """
